@@ -96,7 +96,6 @@ void main() {
 	free(c);
 }
 
-
 void init_random_matrix(matrixNN m) {
 	int i, j;
 	for (i = 0; i < N; i++) {
@@ -225,4 +224,5 @@ void write_matrix_to_file(const char* filename, const matrixNN r) {
 		}
 		fprintf(f, "\n");
 	}
+	fclose(f);
 }
