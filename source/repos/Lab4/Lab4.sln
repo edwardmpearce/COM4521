@@ -1,0 +1,37 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30002.166
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Lab4Exercise1", "Lab4Exercise1\Lab4Exercise1.vcxproj", "{BBC26C42-71D1-43E7-A08C-7D95DF50208A}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Lab4Exercise2", "Lab4Exercise2\Lab4Exercise2.vcxproj", "{C68785D6-0870-46E9-85F5-9D6DCFBB68CF}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Lab4Exercise3", "Lab4Exercise3\Lab4Exercise3.vcxproj", "{2E649E4A-1528-466B-94AC-19A6DB2B058C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BBC26C42-71D1-43E7-A08C-7D95DF50208A}.Debug|x64.ActiveCfg = Debug|x64
+		{BBC26C42-71D1-43E7-A08C-7D95DF50208A}.Debug|x64.Build.0 = Debug|x64
+		{BBC26C42-71D1-43E7-A08C-7D95DF50208A}.Release|x64.ActiveCfg = Release|x64
+		{BBC26C42-71D1-43E7-A08C-7D95DF50208A}.Release|x64.Build.0 = Release|x64
+		{C68785D6-0870-46E9-85F5-9D6DCFBB68CF}.Debug|x64.ActiveCfg = Debug|x64
+		{C68785D6-0870-46E9-85F5-9D6DCFBB68CF}.Debug|x64.Build.0 = Debug|x64
+		{C68785D6-0870-46E9-85F5-9D6DCFBB68CF}.Release|x64.ActiveCfg = Release|x64
+		{C68785D6-0870-46E9-85F5-9D6DCFBB68CF}.Release|x64.Build.0 = Release|x64
+		{2E649E4A-1528-466B-94AC-19A6DB2B058C}.Debug|x64.ActiveCfg = Debug|x64
+		{2E649E4A-1528-466B-94AC-19A6DB2B058C}.Debug|x64.Build.0 = Debug|x64
+		{2E649E4A-1528-466B-94AC-19A6DB2B058C}.Release|x64.ActiveCfg = Release|x64
+		{2E649E4A-1528-466B-94AC-19A6DB2B058C}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {1D3B8BEF-72D7-47B4-87D2-44D61DC3AE6F}
+	EndGlobalSection
+EndGlobal
