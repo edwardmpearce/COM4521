@@ -80,7 +80,7 @@ int main(int argc, char *argv[])
 	else if (MULTIBLOCK == 1) {
 		/* 1.8 Configure 8 blocks of 128 threads and launch the `affine_decrypt_multiblock` kernel */
 		dim3 blocksPerGrid(8, 1, 1);
-		dim3 threadsPerBlock(N/128, 1, 1);
+		dim3 threadsPerBlock(N/8, 1, 1); // Note: 8 * 128 = 1024.
 		affine_decrypt_multiblock <<<blocksPerGrid, threadsPerBlock >>>(d_input, d_output);
 	}
 

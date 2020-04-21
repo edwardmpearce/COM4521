@@ -58,8 +58,8 @@ int validate(int *c_1, int *c_2) {
 Create a new kernel `matrixAdd` to perform the matrix addition. */
 __global__ void matrixAdd(int *a, int *b, int *c, unsigned int height, unsigned int width) {
 	/* `blockDim.x` and `blockDim.y` are set by preprocessor definitions `BLOCK_WIDTH` and `BLOCK_HEIGHT`, respectively. */
-	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-	unsigned int j = blockIdx.y * blockDim.y + threadIdx.y;
+	unsigned int i = blockIdx.y * blockDim.y + threadIdx.y;	// Height/row index
+	unsigned int j = blockIdx.x * blockDim.x + threadIdx.x; // Width/column index
 	// To avoid out-of-bounds memory errors with leftover threads in end blocks 
 	if ((i < height) && (j < width)) {
 		unsigned int idx = i * width + j;
@@ -110,7 +110,7 @@ int main(void) {
 	checkCUDAError("CUDA Memcpy Device to Host");
 
 	// Validate the GPU result
-	errors = validate(c, c_ref);
+	errors = validate(c_ref, c);
 	printf("CUDA GPU result has %d errors.\n", errors);
 
 	// Cleanup

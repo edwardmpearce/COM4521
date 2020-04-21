@@ -81,7 +81,7 @@ int main(void) {
 	checkCUDAError("CUDA Memcpy Device to Host");
 
 	// Validate the GPU result
-	errors = validate(c, c_ref);
+	errors = validate(c_ref, c);
 	printf("CUDA GPU result has %d errors.\n", errors);
 
 	// Cleanup
