@@ -115,9 +115,14 @@ int main(void) {
 	/* 1.4 Print the measured bandwidth to the console for comparison with the theoretical bandwidth. */
 	printf("Measured Bandwidth is %f GB/s\n", measuredBW / 1e6); // Convert kB/s to GB/s
 	/* Don’t forget to switch to Release mode to profile your code execution times.
+	Library Desktop computer, N = 65536
 	                                         Theoretical Bandwidth: 243.328 GB/s
 	In Debug Mode:   Execution time: 0.016  ms, Measured Bandwidth:  48.956 GB/s
-	In Release Mode: Execution time: 0.0064 ms, Measured Bandwidth: 122.279 GB/s */
+	In Release Mode: Execution time: 0.0064 ms, Measured Bandwidth: 122.279 GB/s 
+	InstanceHub Remote Computer, N = 65536
+											 Theoretical Bandwidth: 160.320 GB/s
+	In Debug Mode:   Execution time: 0.028  ms, Measured Bandwidth:  28.119 GB/s
+	In Release Mode: Execution time: 0.011  ms, Measured Bandwidth:  70.418 GB/s */
 	return 0;
 }
 
