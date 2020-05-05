@@ -1,8 +1,8 @@
 /* Lab 5 Exercise 3 Program
 In this program we experiment with using texture memory whilst blurring an image using a GPU. 
 We will explicitly use texture binding rather than using qualifiers to force memory loads through the read-only cache. 
-There are good reasons for doing this when dealing with problems which relate to images or with problems 
-which decompose naturally to 2D layouts. Potential benefits include improved caching, address wrapping and filtering.
+There are good reasons for doing this when dealing with problems which relate to images or with problems which 
+decompose naturally to 2D layouts. Potential benefits include improved caching, address wrapping and filtering.
 An image of a dog, `input.ppm`, is provided. Build and execute the code to see the result of executing the image blur kernel.
 You can modify the macro `SAMPLE_SIZE` to increase the scale of the blur. */
 /* GPU devices possess several different types of memory and caches, including:
@@ -90,7 +90,10 @@ Modify the new kernel to perform a texture lookup using `tex1Dfetch`.
 Modify the host code to execute the `texture1D` version of the kernel after the first version 
 saving the timing value to the `.y` component of the variable `ms`. 
 You will need to add appropriate host code to bind and unbind the texture before and after the kernel execution, respectively. */
-__global__ void image_blur_texture1D(uchar4* image, uchar4* image_output) {
+
+texture<uchar4, cudaTextureType1D, cudaReadModeElementType> sample1D;
+// Texture references can only be declared as static global variables and cannot be passed as function/kernel arguments
+__global__ void image_blur_texture1D(uchar4* image_output) {
 	// Map from thread position in grid to pixel position
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -118,9 +121,9 @@ __global__ void image_blur_texture1D(uchar4* image, uchar4* image_output) {
 			if (y_offset >= IMAGE_DIM) {
 				y_offset -= IMAGE_DIM;
 			}
-			// Linearized index of the offset pixel used to read from the input image buffer
 			int offset = y_offset * blockDim.x * gridDim.x + x_offset;
-			pixel = image[offset];
+			// Linearized index of the offset pixel used to read from texture memory
+			pixel = tex1Dfetch(sample1D, offset);
 
 			// Sum the rgb values over the sample grid `(x,y) + [-SAMPLE_SIZE, SAMPLE_SIZE]^2`
 			average.x += pixel.x;
@@ -142,10 +145,13 @@ __global__ void image_blur_texture1D(uchar4* image, uchar4* image_output) {
 /* 3.2 Create a copy of the `image_blur` kernel called `image_blur_texture2D`.
 Declare a 2-dimensional texture reference with `cudaReadModeElementType`.
 Modify the new kernel to perform a texture lookup using `tex2D`. 
-Modify the host code to execute the `texture2D `version of the kernel after the `texture1D` version
+Modify the host code to execute the `texture2D` version of the kernel after the `texture1D` version
 saving the timing value to the `.z` component of the variable `ms`. 
 You will need to add appropriate host code to bind and unbind the texture before and after the kernel execution, respectively. */
-__global__ void image_blur_texture2D(uchar4* image, uchar4* image_output) {
+
+texture<uchar4, cudaTextureType2D, cudaReadModeElementType> sample2D;
+// Texture references can only be declared as static global variables and cannot be passed as function/kernel arguments
+__global__ void image_blur_texture2D(uchar4* image_output) {
 	// Map from thread position in grid to pixel position
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -156,29 +162,16 @@ __global__ void image_blur_texture2D(uchar4* image, uchar4* image_output) {
 	// For each thread (x,y) iterate over the sample grid of neighbouring pixels (x,y) + [-SAMPLE_SIZE, SAMPLE_SIZE]^2
 	for (int i = -SAMPLE_SIZE; i <= SAMPLE_SIZE; i++) {
 		for (int j = -SAMPLE_SIZE; j <= SAMPLE_SIZE; j++) {
+			/* 3.3 In the case of the 2D texture version it is possible to perform wrapping of the index values without
+			explicitly checking the values of `x_offset`, `y_offset`. To do this remove the checks from your kernel, 
+			and set the structure members `addressMode[0]`, `addressMode[1]` of your 2D texture reference
+			to `cudaAddressModeWrap` in the `main` function. */
 			// Calculate the position of an offset pixel within the sample grid around (x,y)
 			int x_offset = x + i;
 			int y_offset = y + j;
-			/* 3.3 In the case of the 2D texture version it is possible to perform wrapping of the index values without
-			explicitly checking the values of `x_offset`, `y_offset`. To do this remove the checks from your kernel and
-			set the structure members `addressMode[0]`, `addressMode[1]` of your 2D texture reference to `cudaAddressModeWrap`. */
-			// Wrap the boundaries of the image like a torus in case the sample grid leaves the image boundaries
-			if (x_offset < 0) {
-				x_offset += IMAGE_DIM;
-			}
-			if (x_offset >= IMAGE_DIM) {
-				x_offset -= IMAGE_DIM;
-			}
-			if (y_offset < 0) {
-				y_offset += IMAGE_DIM;
-			}
-			if (y_offset >= IMAGE_DIM) {
-				y_offset -= IMAGE_DIM;
-			}
-			// Linearized index of the offset pixel used to read from the input image buffer
-			int offset = y_offset * blockDim.x * gridDim.x + x_offset;
-			pixel = image[offset];
-
+			// For 2D texture lookup, we don't need to calculate linearized indices
+			pixel = tex2D(sample2D, x_offset, y_offset);
+			
 			// Sum the rgb values over the sample grid `(x,y) + [-SAMPLE_SIZE, SAMPLE_SIZE]^2`
 			average.x += pixel.x;
 			average.y += pixel.y;
@@ -234,11 +227,41 @@ int main(void) {
 	cudaEventElapsedTime(&ms.x, start, stop);
 	checkCUDAError("Kernel (normal)");
 
-	/**/
+	/* 3.1 Execute the `texture1D` version of the kernel after the normal version, saving the timing value to the `ms.y`.
+	You will need to bind and unbind the texture before and after the kernel execution, respectively. */
+	// Bind the texture reference `sample1D` declared earlier to the memory buffer for the input image `d_image`
+	cudaBindTexture(0, sample1D, d_image, image_size);
+	checkCUDAError("Bind cudaTextureType1D");
+	cudaEventRecord(start, 0);
+	image_blur_texture1D << <blocksPerGrid, threadsPerBlock >> > (d_image_output);
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&ms.y, start, stop);
+	cudaUnbindTexture(sample1D);
+	checkCUDAError("Kernel (tex1D)");
 
+	/* 3.2 Execute the `texture2D` kernel after the `texture1D` version, saving the timing value to the `ms.z`.
+	You will need to bind and unbind the texture before and after the kernel execution, respectively. 
+	Moreover, the CUDA runtime requires that we provide a `cudaChannelFormatDesc` when we bind 2D textures */
+	/* 3.3 When using 2D textures we can wrap index values around without explicitly checking them. 
+	To do this remove the checks from your kernel, and set the structure members `addressMode[0]`, `addressMode[1]` 
+	of your 2D texture reference `sample2D` to `cudaAddressModeWrap` in the `main` function before binding. */
+	// Results in wrapping the image boundaries around like a torus when we access outside the boundaries
+	sample2D.addressMode[0] = cudaAddressModeWrap;
+	sample2D.addressMode[1] = cudaAddressModeWrap;
 
-	/**/
-
+	// Declare a channel format descriptor called `desc` with data type `uchar4`
+	cudaChannelFormatDesc desc = cudaCreateChannelDesc<uchar4>();
+	// Bind the formatted texture reference `sample2D` to the memory buffer for the input image `d_image`
+	cudaBindTexture2D(0, sample2D, d_image, desc, IMAGE_DIM, IMAGE_DIM, IMAGE_DIM * sizeof(uchar4));
+	checkCUDAError("Bind cudaTextureType2D");
+	cudaEventRecord(start, 0);
+	image_blur_texture2D << <blocksPerGrid, threadsPerBlock >> > (d_image_output);
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&ms.z, start, stop);
+	checkCUDAError("Kernel (tex2D)");
+	cudaUnbindTexture(sample2D);
 
 	// Copy the blurred output image from device to host for output to file
 	cudaMemcpy(h_image, d_image_output, image_size, cudaMemcpyDeviceToHost);
@@ -246,9 +269,9 @@ int main(void) {
 
 	// Output timings
 	printf("Execution times:\n");
-	printf("\tNormal version: %f\n", ms.x);
-	printf("\ttex1D version: %f\n", ms.y);
-	printf("\ttex2D version: %f\n", ms.z);
+	printf("\tNormal version: %f\n", ms.x); // 16.917631ms
+	printf("\ttex1D version: %f\n", ms.y);  // 10.342144ms
+	printf("\ttex2D version: %f\n", ms.z);  // 10.314624ms
 
 	// Output image to file `output.ppm`
 	output_image_file(h_image);
@@ -294,7 +317,7 @@ void input_image_file(char* filename, uchar4* image) {
 	// See also https://en.wikipedia.org/wiki/Netpbm for further information and history
 	f = fopen(filename, "rb");
 	if (f == NULL){
-		fprintf(stderr, "Error opening 'input.ppm' input file\n");
+		fprintf(stderr, "Error opening '%s' input file\n", filename);
 		exit(1);
 	}
 	fscanf(f, "%s\n", &temp); // Read the first line of the file to a temporary buffer
