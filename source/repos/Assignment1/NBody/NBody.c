@@ -252,8 +252,8 @@ void read_nbody_file(char* filename, int N) {
 	FILE* f; // Input file handle
 	char line_buffer[BUFFER_SIZE]; // Buffer to hold lines read from file
 	char* ptr_ch = NULL; // Pointer to track character position when reading `line_buffer` string
-	unsigned int line_number = 0; // Keep track of line number for error messaging
-	unsigned int body_count = 0; // Count of number of body data lines read to ensure it matches `N`
+	int line_number = 0; // Keep track of line number for error messaging
+	int body_count = 0; // Count of number of body data lines read to ensure it matches `N`
 
 	f = fopen(filename, "r"); // Open the file in read-only mode
 	if (f == NULL) {
@@ -265,12 +265,12 @@ void read_nbody_file(char* filename, int N) {
 	Reads from file into buffer until (soonest of) either `\n` or `EOF` is read, or `BUFFER_SIZE-1` characters read */
 	while (fgets(line_buffer, BUFFER_SIZE, f) != NULL) {
 		line_number++; // Increment count of lines read
-		if (line_buffer[0] == "#") { // If first char in line is `#` skip to next line to ignore comments
+		if (line_buffer[0] == '#') { // If first char in line is `#` skip to next line to ignore comments
 			continue;
 		}
-		if (line_buffer[strlen(line_buffer) - 1] != "\n") { // If last char read from file is not "\n", the line is too long
+		if (line_buffer[strlen(line_buffer) - 1] != '\n') { // If last char read from file is not '\n', the line is too long
 			// This checks that a full line of data was written from file to buffer when not a comment line
-			fprintf(stderr, "Error reading line %ud: Line length exceeds buffer size of %d characters\n", line_number, BUFFER_SIZE);
+			fprintf(stderr, "Error reading line %u: Line length exceeds buffer size of %d characters\n", line_number, BUFFER_SIZE);
 			exit(EXIT_FAILURE);
 		}
 
@@ -281,12 +281,12 @@ void read_nbody_file(char* filename, int N) {
 		Returns `NULL` pointer if no comma `,` character found in line after position `ptr_ch`
 		See http://www.cplusplus.com/reference/cstring/strchr/ for reference */
 		if ((strchr(ptr_ch, ',') == NULL)) { // Check for comma after first data value
-			fprintf(stderr, "Error reading line %ud: No data delimiters (`,`) detected\n", line_number);
+			fprintf(stderr, "Error reading line %u: No data delimiters (`,`) detected\n", line_number);
 			exit(EXIT_FAILURE);
 		}
 		else { // This appears to be a valid data line. Don't write past memory bounds for `nbody_in`
 			if (body_count > N-1) { // Throw an error if we have already read `N` or more data rows
-				fprintf(stderr, "Error: Num bodies in file exceeds input N (%d)\n", N);
+				fprintf(stderr, "Error reading line %u: Num bodies in file exceeds input N (%d)\n", line_number, N);
 				exit(EXIT_FAILURE);
 			} 
 			/* Read `float x` value or randomly generate if data missing */
@@ -295,12 +295,12 @@ void read_nbody_file(char* filename, int N) {
 				ptr_ch++;
 			}
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
-			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == "+") || (ptr_ch[0] == "-")) && isdigit(ptr_ch[1]))) {
+			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `x` value, then update `ptr_ch` to point to end of number
-				nbody_in->x[body_count] = strtod(ptr_ch, &ptr_ch);
+				nbody_in->x[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
-					fprintf(stderr, "Error reading line %ud: Unexpected format when parsing `x` data to float\n", line_number);
+					fprintf(stderr, "Error reading line %u: Unexpected format when parsing `x` data to float\n", line_number);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -310,7 +310,7 @@ void read_nbody_file(char* filename, int N) {
 			ptr_ch = strchr(ptr_ch, ',') + 1; // Update `ptr_ch` to start after the 1st comma
 		}
 		if ((strchr(ptr_ch, ',') == NULL)) { // Check for comma after second data value
-			fprintf(stderr, "Error reading line %ud: Only 1 data delimiter (`,`) detected\n", line_number);
+			fprintf(stderr, "Error reading line %u: Only 1 data delimiter (`,`) detected\n", line_number);
 			exit(EXIT_FAILURE);
 		}
 		else { /* Read `float y` value or randomly generate if missing */
@@ -319,12 +319,12 @@ void read_nbody_file(char* filename, int N) {
 				ptr_ch++;
 			}
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
-			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == "+") || (ptr_ch[0] == "-")) && isdigit(ptr_ch[1]))) {
+			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `y` value, then update `ptr_ch` to point to end of number
-				nbody_in->y[body_count] = strtod(ptr_ch, &ptr_ch);
+				nbody_in->y[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
-					fprintf(stderr, "Error reading line %ud: Unexpected format when parsing `y` data to float\n", line_number);
+					fprintf(stderr, "Error reading line %u: Unexpected format when parsing `y` data to float\n", line_number);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -334,7 +334,7 @@ void read_nbody_file(char* filename, int N) {
 			ptr_ch = strchr(ptr_ch, ',') + 1; // Update `ptr_ch` to start after 2nd comma
 		}
 		if ((strchr(ptr_ch, ',') == NULL)) { // Check for comma after third data value
-			fprintf(stderr, "Error reading line %ud: Only 2 data delimiters (`,`) detected\n", line_number);
+			fprintf(stderr, "Error reading line %u: Only 2 data delimiters (`,`) detected\n", line_number);
 			exit(EXIT_FAILURE);
 		}
 		else { /* Read `float vx` value or set to zero if missing */
@@ -343,12 +343,12 @@ void read_nbody_file(char* filename, int N) {
 				ptr_ch++;
 			}
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
-			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == "+") || (ptr_ch[0] == "-")) && isdigit(ptr_ch[1]))) {
+			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `vx` value, then update `ptr_ch` to point to end of number
-				nbody_in->vx[body_count] = strtod(ptr_ch, &ptr_ch);
+				nbody_in->vx[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
-					fprintf(stderr, "Error reading line %ud: Unexpected format when parsing `vx` data to float\n", line_number);
+					fprintf(stderr, "Error reading line %u: Unexpected format when parsing `vx` data to float\n", line_number);
 					exit(EXIT_FAILURE);
 				}
 			} // Otherwise decide data is missing or corrupted - means strings like ".5" and "-.2" are ignored
@@ -356,7 +356,7 @@ void read_nbody_file(char* filename, int N) {
 			ptr_ch = strchr(ptr_ch, ',') + 1; // Update `ptr_ch` to start after 3rd comma
 		}
 		if ((strchr(ptr_ch, ',') == NULL)) { // Check for comma after fourth data value
-			fprintf(stderr, "Error reading line %ud: Only 3 data delimiters (`,`) detected\n", line_number);
+			fprintf(stderr, "Error reading line %u: Only 3 data delimiters (`,`) detected\n", line_number);
 			exit(EXIT_FAILURE);
 		}
 		else { /* Read `float vy` value or set to zero if missing */
@@ -365,12 +365,12 @@ void read_nbody_file(char* filename, int N) {
 				ptr_ch++;
 			}
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
-			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == "+") || (ptr_ch[0] == "-")) && isdigit(ptr_ch[1]))) {
+			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `vx` value, then update `ptr_ch` to point to end of number
-				nbody_in->vy[body_count] = strtod(ptr_ch, &ptr_ch);
+				nbody_in->vy[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
-					fprintf(stderr, "Error reading line %ud: Unexpected format when parsing `vy` data to float\n", line_number);
+					fprintf(stderr, "Error reading line %u: Unexpected format when parsing `vy` data to float\n", line_number);
 					exit(EXIT_FAILURE);
 				}
 			} // Otherwise decide data is missing or corrupted - means strings like ".5" and "-.2" are ignored
@@ -378,21 +378,21 @@ void read_nbody_file(char* filename, int N) {
 			ptr_ch = strchr(ptr_ch, ',') + 1; // Update `ptr_ch` to start after 4th comma
 		}
 		if ((strchr(ptr_ch, ',') != NULL)) { // Ensure no more commas after fifth data value
-			fprintf(stderr, "Error reading line %ud: Too many data columns detected (5 expected)\n", line_number);
+			fprintf(stderr, "Error reading line %u: Too many data columns detected (5 expected)\n", line_number);
 			exit(EXIT_FAILURE);
 		}
 		else { // Else read from after the 4th/last comma (`ptr_ch`) to the end of the line
 		/* Read `float m` value or set to 1/N if data missing, corrupted, or zero (no massless bodies) */
 			if (strtod(ptr_ch, NULL) == 0) { // If zero returned, then input data was either missing, corrupted, or zero
-				fprintf(stderr, "Error reading line %ud: Mass data missing, corrupted, or set to zero. Replacing with default value (1/N) to avoid massless bodies\n", line_number);
+				fprintf(stderr, "Error reading line %u: Mass data missing, corrupted, or set to zero. Replacing with default value (1/N) to avoid massless bodies\n", line_number);
 				// Set mass to 1/N to avoid creating massless objects (and divide-by-zero problems later)
 				nbody_in->m[body_count] = (float)1 / N; // Mass distributed equally among N bodies
 			}
 			else { // Otherwise non-zero `float` value for mass read successfully, so write to `m`
 				// Parse and store `m` value, then update `ptr_ch` to point to end of number
-				nbody_in->m[body_count] = strtod(ptr_ch, &ptr_ch);
+				nbody_in->m[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				if (strpbrk(ptr_ch, "0123456789") != NULL) { // Check there are no further digits before the end of the line
-					fprintf(stderr, "Error reading line %ud: Unexpected format when parsing mass data\n", line_number);
+					fprintf(stderr, "Error reading line %u: Unexpected format when parsing mass data\n", line_number);
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -401,7 +401,7 @@ void read_nbody_file(char* filename, int N) {
 		// Read new line if not end of file. Thus data file can be terminated with single empty line.
 	}
 	if (body_count != N) { // Check fails when fewer than N bodies in file
-		fprintf(stderr, "Error: Num bodies in file (%ud) does not match input N (%d)\n", body_count, N);
+		fprintf(stderr, "Error: Num bodies in file (%u) does not match input N (%d)\n", body_count, N);
 		exit(EXIT_FAILURE);
 	}
 	fclose(f);
