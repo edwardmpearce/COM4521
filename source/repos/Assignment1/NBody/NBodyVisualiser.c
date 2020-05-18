@@ -3,8 +3,6 @@
 #include <string.h>
 #include <math.h>
 #include <stdbool.h>
-
-
 #include "NBodyVisualiser.h"
 
 // User supplied globals
@@ -24,21 +22,20 @@ GLuint tbo_hist = 0;
 GLuint tex_hist = 0;
 GLuint vao_hist_instance_ids = 0;
 
-// instancing variables for nbody
+// Instancing variables for nbody
 GLuint vao_nbody = 0;
 GLuint vao_nbody_vertices = 0;
 GLuint tbo_nbody = 0;
 GLuint tex_nbody = 0;
 GLuint vao_nbody_instance_ids = 0;
 
-
-// mouse controls
+// Mouse controls
 int mouse_old_x, mouse_old_y;
 int mouse_buttons = 0;
 float rotate_x = 0.0, rotate_z = 0.0;
 float translate_z = -1.0;
 
-// vertex shader handles
+// Vertex shader handles
 GLuint vs_hist_shader = 0;
 GLuint vs_nbody_shader = 0;
 GLuint vs_hist_program = 0;
@@ -46,11 +43,11 @@ GLuint vs_nbody_program = 0;
 GLuint vs_hist_instance_index = 0;
 GLuint vs_nbody_instance_index = 0;
 
-//render options
+// Render options
 bool display_bodies = true;
-bool display_denisty = false;
+bool display_density = false;
 
-// function prototypes
+// Function prototypes
 void displayLoop(void);
 void initHistShader();
 void initNBodyShader();
@@ -67,7 +64,6 @@ void handleMouseMotionDefault(int x, int y);
 // Vertex shader source code
 const char* hist_vertexShaderSource =
 {
-
     "#version 130				                            							\n"
     "#extension GL_EXT_gpu_shader4 : enable												\n"
 	"uniform samplerBuffer instance_tex;												\n"
@@ -80,6 +76,7 @@ const char* hist_vertexShaderSource =
 	"   gl_Position = gl_ModelViewProjectionMatrix * position;		    				\n"
 	"}																					\n"
 };
+
 const char* nbody_vertexShaderSource =
 {
     "#version 130										                                \n"
@@ -97,7 +94,6 @@ const char* nbody_vertexShaderSource =
 	"}																					\n"
 };
 
-
 //////////////////////////////// Header declared functions ////////////////////////////////
 void initViewer(unsigned int n, unsigned int d, MODE m, void(*simulate)(void)) {
 	N = n;
@@ -105,7 +101,7 @@ void initViewer(unsigned int n, unsigned int d, MODE m, void(*simulate)(void)) {
 	M = m;
 	simulate_function = simulate;
 
-	// Initialiser the OpenGL viewer and context
+	// Initialise the OpenGL viewer and context
 	initGL();
 
 	// Initialise our instance rendering and the data
@@ -159,25 +155,24 @@ void displayLoop(void) {
 	if (M == CUDA) {
 		printf("Error: CUDA Mode Rendering Not Supported for Part 1\n");
 	}
-	// CPU or OPENMP
-	else {
-		//map buffer to positions TBO and copy data to it from user supplied pointer
+	else { // CPU or OPENMP
+		// Map buffer to positions Texture Buffer Object and copy data to it from user supplied pointer
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, tbo_nbody);
-		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	//tbo_nbody buffer
+		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	// `tbo_nbody` buffer
 		if (dptr == 0) {
-			printf("Error: Unable to map nBody Texture Buffer Object\n");
+			printf("Error: Unable to map NBody Texture Buffer Object\n");
 			return;
 		}
 		if (Bodies != 0) {
-			for (i = 0; i < N; i++){
-				unsigned int index = i * 2;
+			for (i = 0; i < N; i++) {
+				unsigned int index = i + i;
 				dptr[index] = Bodies->x[i];
 				dptr[index + 1] = Bodies->y[i];
 			}
 		}
 		else if ((PositionsX != 0) && (PositionsY != 0)) {
-			for (i = 0; i < N; i++){
-				unsigned int index = i * 2;
+			for (i = 0; i < N; i++) {
+				unsigned int index = i + i;
 				dptr[index] = PositionsX[i];
 				dptr[index + 1] = PositionsY[i];
 			}
@@ -185,15 +180,15 @@ void displayLoop(void) {
 		glUnmapBuffer(GL_TEXTURE_BUFFER_EXT);
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, 0);
 
-		//map hist buffer to positions TBO and copy data to it from user supplied pointer
+		// Map histogram buffer to positions Texture Body Object and copy data to it from user supplied pointer
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, tbo_hist);
-		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	//tbo_nbody buffer
+		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	// `tbo_nbody` buffer
 		if (dptr == 0) {
 			printf("Error: Unable to map Histogram Texture Buffer Object\n");
 			return;
 		}
 		if (Densities != 0) {
-			for (i = 0; i < D*D; i++){
+			for (i = 0; i < D*D; i++) {
 				dptr[i] = Densities[i];
 			}
 		}
@@ -201,20 +196,19 @@ void displayLoop(void) {
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, 0);
 	}
 
-	//render
+	// Render
 	render();
 	checkGLError();
 }
 
 
 void initHistShader() {
-	//hist vertex shader
+	// Histogram vertex shader
 	vs_hist_shader = glCreateShader(GL_VERTEX_SHADER);
 	glShaderSource(vs_hist_shader, 1, &hist_vertexShaderSource, 0);
 	glCompileShader(vs_hist_shader);
 
-
-	// check for errors
+	// Check for errors
 	GLint status;
 	glGetShaderiv(vs_hist_shader, GL_COMPILE_STATUS, &status);
 	if (status == GL_FALSE) {
@@ -224,7 +218,6 @@ void initHistShader() {
 		glGetShaderInfoLog(vs_hist_shader, 1024, &len, data);
 		printf("%s", data);
 	}
-
 
 	// Program
 	vs_hist_program = glCreateProgram();
@@ -237,19 +230,19 @@ void initHistShader() {
 
 	glUseProgram(vs_hist_program);
 
-	// get shader variables
+	// Get shader variables
 	vs_hist_instance_index = glGetAttribLocation(vs_hist_program, "instance_index");
 	if (vs_hist_instance_index == (GLuint)-1) {
 		printf("Warning: Histogram Shader program missing 'attribute in uint instance_index'\n");
 	}
 
 	glUseProgram(0);
-	//check for any errors
+	// Check for any errors
 	checkGLError();
 }
 
 void initNBodyShader() {
-	//nbody vertex shader
+	// nbody vertex shader
 	vs_nbody_shader = glCreateShader(GL_VERTEX_SHADER);
 	glShaderSource(vs_nbody_shader, 1,&nbody_vertexShaderSource, 0);
 	glCompileShader(vs_nbody_shader);
@@ -264,7 +257,6 @@ void initNBodyShader() {
 		glGetShaderInfoLog(vs_nbody_shader, 1024, &len, data);
 		printf("%s", data);
 	}
-
 
 	// Program
 	vs_nbody_program = glCreateProgram();
@@ -289,41 +281,40 @@ void initNBodyShader() {
 }
 
 void initHistVertexData() {
-	/* vertex array object */
+	/* Vertex Array Object */
 	glGenVertexArrays(1, &vao_hist); // Create our Vertex Array Object  
 	glBindVertexArray(vao_hist); // Bind our Vertex Array Object so we can use it  
 
-	/* create a vertex buffer */
-
-	// create buffer object (all vertex positions normalised between -0.5 and +0.5)
+	/* Create a vertex buffer */
+	// Create buffer object (all vertex positions normalised between -0.5 and +0.5)
 	glGenBuffers(1, &vao_hist_vertices);
 	glBindBuffer(GL_ARRAY_BUFFER, vao_hist_vertices);
 	glBufferData(GL_ARRAY_BUFFER, D*D * 4 * 3 * sizeof(float), 0, GL_STATIC_DRAW);
 	float* verts = (float*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	float quad_size = 1.0f / (float)(D);
-	for (unsigned int x = 0; x < D; x++) {
-		for (unsigned int y = 0; y < D; y++) {
-			int offset = (x + (y * (D))) * 3 * 4;
+	float quad_size = 1.0f / D;
+	for (unsigned int y = 0; y < D; y++) {
+		for (unsigned int x = 0; x < D; x++) {
+			int offset = (D * y + x) * 3 * 4;
 
 			float x_min = (float)x / (float)(D);
 			float y_min = (float)y / (float)(D);
 
-			//first vertex
+			// First vertex
 			verts[offset + 0] = x_min - 0.5f;
 			verts[offset + 1] = y_min - 0.5f;
 			verts[offset + 2] = 0.0f;
 
-			//second vertex
+			// Second vertex
 			verts[offset + 3] = x_min - 0.5f;
 			verts[offset + 4] = y_min + quad_size - 0.5f;
 			verts[offset + 5] = 0.0f;
 
-			//third vertex
+			// Third vertex
 			verts[offset + 6] = x_min + quad_size - 0.5f;
 			verts[offset + 7] = y_min + quad_size - 0.5f;
 			verts[offset + 8] = 0.0f;
 
-			//fourth vertex
+			// Fourth vertex
 			verts[offset + 9] = x_min + quad_size - 0.5f;
 			verts[offset + 10] = y_min - 0.5f;
 			verts[offset + 11] = 0.0f;
@@ -339,10 +330,10 @@ void initHistVertexData() {
 	glBindBuffer(GL_ARRAY_BUFFER, vao_hist_instance_ids);
 	glBufferData(GL_ARRAY_BUFFER, D*D * 4 * sizeof(unsigned int), 0, GL_STATIC_DRAW);
 	unsigned int* ids = (unsigned int*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	for (unsigned int x = 0; x < D; x++) {
-		for (unsigned int y = 0; y < D; y++) {
-			int index = (x + (y * (D)));
-			int offset = index * 4;
+	for (unsigned int y = 0; y < D; y++) {
+		for (unsigned int x = 0; x < D; x++) {
+			int index = D * y + x;
+			int offset = index + index + index + index; // int offset = index * 4
 
 			// Four vertices (a quad) have the same instance index
 			ids[offset + 0] = index;
@@ -361,10 +352,9 @@ void initHistVertexData() {
 	checkGLError();
 
 	/* Texture buffer object */
-
 	glGenBuffers(1, &tbo_hist);
     glBindBuffer(GL_TEXTURE_BUFFER, tbo_hist);
-    glBufferData(GL_TEXTURE_BUFFER, D*D * 1 * sizeof(float), 0, GL_DYNAMIC_DRAW);		// 1 float elements in a texture buffer object for histogram density
+    glBufferData(GL_TEXTURE_BUFFER, D*D * 1 * sizeof(float), 0, GL_DYNAMIC_DRAW); // 1 `float` element in a texture buffer object for histogram density
 
 	/* Generate texture */
 	glGenTextures(1, &tex_hist);
@@ -374,28 +364,27 @@ void initHistVertexData() {
 	// Unbind buffers
     glBindBuffer(GL_TEXTURE_BUFFER, 0);
 
-	// Unbind vao
+	// Unbind VAO
 	glBindVertexArray(0); // Unbind our Vertex Array Object 
 
 	checkGLError();
 }
 
 void initNBodyVertexData() {
-	/* vertex array object */
+	/* Vertex Array Object */
 	glGenVertexArrays(1, &vao_nbody);	// Create our Vertex Array Object  
 	glBindVertexArray(vao_nbody);		// Bind our Vertex Array Object so we can use it  
 
-	/* create a vertex buffer */
-
+	/* Create a vertex buffer */
 	// create buffer object (all vertex positions normalised between -0.5 and +0.5)
 	glGenBuffers(1, &vao_nbody_vertices);
 	glBindBuffer(GL_ARRAY_BUFFER, vao_nbody_vertices);
 	glBufferData(GL_ARRAY_BUFFER, N * 3 * sizeof(float), 0, GL_STATIC_DRAW);
 	float* verts = (float*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 	for (unsigned int i = 0; i < N; i++) {
-			int offset = i*3;
+			int offset = i + i + i; // int offset = i * 3
 
-			//vertex point
+			// Vertex point
 			verts[offset + 0] = -0.5f;
 			verts[offset + 1] = -0.5f;
 			verts[offset + 2] = 0.0f;
@@ -405,39 +394,39 @@ void initNBodyVertexData() {
 	glEnableVertexAttribArray(0);
 	checkGLError();
 
-	// instance index buffer
+	// Instance index buffer
 	glGenBuffers(1, &vao_nbody_instance_ids);
 	glBindBuffer(GL_ARRAY_BUFFER, vao_nbody_instance_ids);
 	glBufferData(GL_ARRAY_BUFFER, N * 1 * sizeof(unsigned int), 0, GL_STATIC_DRAW);
 	unsigned int* ids = (unsigned int*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 	for (unsigned int i = 0; i < N; i++) {
-			//single vertex as it is a point
+			// Single vertex as it is a point
 			ids[i] = i;
 	}
 
-	//map instance 
+	// Map instance 
 	glVertexAttribIPointer((GLuint)vs_nbody_instance_index, 1, GL_UNSIGNED_INT, 0, 0); // Set up instance id attributes pointer in shader
 	glEnableVertexAttribArray(vs_nbody_instance_index);
 	glUnmapBuffer(GL_ARRAY_BUFFER);
 
-	//check for errors
+	// Check for errors
 	checkGLError();
 
-	/* texture buffer object */
+	/* Texture Buffer Object */
 
 	glGenBuffers(1, &tbo_nbody);
 	glBindBuffer(GL_TEXTURE_BUFFER, tbo_nbody);
-    glBufferData(GL_TEXTURE_BUFFER, N * 2 * sizeof(float), 0, GL_DYNAMIC_DRAW);		// 2 float elements in a texture buffer object for x and y position
+    glBufferData(GL_TEXTURE_BUFFER, N * 2 * sizeof(float), 0, GL_DYNAMIC_DRAW);	// 2 `float` elements in a texture buffer object for x and y position
 
-	/* generate texture */
+	/* Generate texture */
 	glGenTextures(1, &tex_nbody);
     glBindTexture(GL_TEXTURE_BUFFER, tex_nbody);
     glTexBuffer(GL_TEXTURE_BUFFER, GL_RG32F, tbo_nbody);
 
-	//unbind buffers
+	// Unbind buffers
     glBindBuffer(GL_TEXTURE_BUFFER, 0);
 
-	//unbind vao
+	// Unbind VAO
 	glBindVertexArray(0); // Unbind our Vertex Array Object 
 
 	checkGLError();
@@ -446,7 +435,7 @@ void initNBodyVertexData() {
 void destroyViewer() {
 	checkGLError();
 
-	//cleanup hist vao
+	// Cleanup histigram VAO
 	glBindVertexArray(vao_hist);
 	glDeleteBuffers(1, &vao_hist_vertices);
 	vao_hist_vertices = 0;
@@ -460,7 +449,7 @@ void destroyViewer() {
 	glDeleteVertexArrays(1, &vao_hist);
 	vao_hist = 0;
 
-	//cleanup nbody vao
+	// Cleanup nbody VAO
 	glBindVertexArray(vao_nbody);
 	glDeleteBuffers(1, &vao_nbody_vertices);
 	vao_nbody_vertices = 0;
@@ -478,106 +467,102 @@ void destroyViewer() {
 }
 
 void initGL() {
+	// Specify command line argument for window name and initialise glut program with `glutInit` function
 	int argc = 1;
 	char * argv[] = { "Com4521 Assignment - NBody Visualiser" };
-
-	//glut init
 	glutInit(&argc, argv);
 
-	//init window
+	// Initialise window
 	glutInitDisplayMode(GLUT_RGB);
 	glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-	glutInitWindowPosition(100, 100);
+	glutInitWindowPosition(100, 0);
 	glutCreateWindow(*argv);
 
 	// glew init (must be done after window creation for some odd reason)
 	glewInit();
-	if (!glewIsSupported("GL_VERSION_2_0 "))
-	{
+	if (!glewIsSupported("GL_VERSION_2_0 ")) {
 		fprintf(stderr, "ERROR: Support for necessary OpenGL extensions missing.\n");
 		fflush(stderr);
 		exit(0);
 	}
 
-	// register default callbacks
+	// Register default callbacks
 	glutDisplayFunc(displayLoop);
 	glutKeyboardFunc(handleKeyboardDefault);
 	glutMotionFunc(handleMouseMotionDefault);
 	glutMouseFunc(handleMouseDefault);
 	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
 
-	// default initialization
+	// Default initialization
 	glClearColor(0.0, 0.0, 0.0, 1.0);
 	glDisable(GL_DEPTH_TEST);
 
-	// viewport
+	// Viewport
 	glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-	// projection
+	// Projection
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
 	gluPerspective(60.0, (GLfloat)WINDOW_WIDTH / (GLfloat)WINDOW_HEIGHT, 0.001, 10.0);
 }
 
 void render(void) {
-	// set view matrix and prepare for rending
+	// Set view matrix and prepare for rendering
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 
-	//transformations
+	// Transformations
 	glTranslatef(0.0, 0.0, translate_z);
 	glRotatef(rotate_x, 1.0, 0.0, 0.0);
 	glRotatef(rotate_z, 0.0, 0.0, 1.0);
 
-	//render the densisty field
-	if (display_denisty){
-		// attach the shader program to rendering pipeline to perform per vertex instance manipulation 
+	// Render the density field
+	if (display_density) {
+		// Attach the shader program to rendering pipeline to perform per vertex instance manipulation 
 		glUseProgram(vs_hist_program);
 
-		// Bind our Vertex Array Object  (contains vertex buffers object and vertex attribute array)
+		// Bind our Vertex Array Object (contains vertex buffers object and vertex attribute array)
 		glBindVertexArray(vao_hist);
 
-		// Bind and activate texture with instance data (held with the TBO)
+		// Bind and activate texture with instance data (held with the Texture Buffer Object)
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_BUFFER_EXT, tex_hist);
 
 		// Draw the vertices with attached vertex attribute pointers
 		glDrawArrays(GL_QUADS, 0, 4 * D*D);
 
-		//unbind the vertex array object
+		// Unbind the Vertex Array Object
 		glBindVertexArray(0);
 
 		// Disable the shader program and return to the fixed function pipeline
 		glUseProgram(0);
 	}
 
-	//render the n bodies
-	if (display_bodies){
-		// attach the shader program to rendering pipeline to perform per vertex instance manipulation 
+	// Render the n bodies
+	if (display_bodies) {
+		// Attach the shader program to rendering pipeline to perform per vertex instance manipulation 
 		glUseProgram(vs_nbody_program);
 
-		// Bind our Vertex Array Object  (contains vertex buffers object and vertex attribute array)
+		// Bind our Vertex Array Object (contains vertex buffers object and vertex attribute array)
 		glBindVertexArray(vao_nbody);
 
-		// Bind and activate texture with instance data (held with the TBO)
+		// Bind and activate texture with instance data (held with the Texture Buffer Object)
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_BUFFER_EXT, tex_nbody);
 
 		// Draw the vertices with attached vertex attribute pointers
 		glDrawArrays(GL_POINTS, 0, 1 * N);
 
-		//unbind the vertex array object
+		// Unbind the vertex array object
 		glBindVertexArray(0);
 
 		// Disable the shader program and return to the fixed function pipeline
 		glUseProgram(0);
 	}
-
 	glutSwapBuffers();
 	glutPostRedisplay();
 }
-
 
 void checkGLError() {
 	int Error;
@@ -589,18 +574,16 @@ void checkGLError() {
 
 void handleKeyboardDefault(unsigned char key, int x, int y) {
 	switch (key) {
-		case(27): case('q') : //escape key or q key
-			//return control to the users program to allow them to clean-up any allcoated memory etc.
-			glutLeaveMainLoop();
-			break;
-		
-		case('b') : //b key
-			display_bodies = !display_bodies;
-			break;
-
-		case('d') : //d key
-			display_denisty = !display_denisty;
-			break;
+	case(27): case('q') : // Escape `Esc` key or `q` key
+		// Return control to the users program to allow them to clean-up any allocated memory etc.
+		glutLeaveMainLoop();
+		break;
+	case('b') : // `b` key to toggle display bodies
+		display_bodies = !display_bodies;
+		break;
+	case('d') : // `d` key to toggle display activity grid map
+		display_density = !display_density;
+		break;
 	}
 }
 
@@ -621,11 +604,11 @@ void handleMouseMotionDefault(int x, int y) {
 	dx = (float)(x - mouse_old_x);
 	dy = (float)(y - mouse_old_y);
 
-	if (mouse_buttons & 1) {
+	if (mouse_buttons & 1) { // Rotate with left click and mouse motion
 		rotate_x += dy * 0.2f;
 		rotate_z += dx * 0.2f;
 	}
-	else if (mouse_buttons & 4) {
+	else if (mouse_buttons & 4) { // Zoom out/in with right click and mouse motion up/down
 		translate_z += dy * 0.01f;
 	}
 
