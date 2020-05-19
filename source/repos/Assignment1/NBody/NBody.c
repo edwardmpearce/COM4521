@@ -211,6 +211,7 @@ void step_serial(void) {
 	This is known as loop jamming or loop fusion. See http://www.it.uom.gr/teaching/c_optimization/tutorial.html
 	Calculating the histogram contribution of each body is far more efficient than iterating over histogram bins/grid cells
 	since we exploit the fact that each body can only be in at most one grid cell at a time (D*D times fewer calculations). */
+	unsigned int i, j; // Counter variables
 	float ax, ay; // Components of resultant acceleration of a particle as a result of gravitational force
 	float local_xi, local_yi; // Local position variables to reduce global memory accesses, especially during inner loop
 	float local_vxi, local_vyi; // Local velocity variables to exchange two global memory reads for one plus two local reads
@@ -220,14 +221,14 @@ void step_serial(void) {
 	// Reset histogram values to zero with `memset`. See http://www.cplusplus.com/reference/cstring/memset/
 	memset(activity_map, 0, sizeof(activity_map));
 
-	for (unsigned int i = 0; i < N; i++) { // Iterating over bodies in the Nbody system
+	for (i = 0; i < N; i++) { // Iterating over bodies in the Nbody system
 		ax = 0; // Reset resultant acceleration in `x` direction to zero for new particle
 		ay = 0; // Reset resultant acceleration in `y` direction to zero for new particle
 		// Read position data from global memory to the stack
 		local_xi = nbody_in->x[i];
 		local_yi = nbody_in->y[i];
 
-		for (unsigned int j = 0; j < N; j++) {
+		for (j = 0; j < N; j++) {
 			if (j == i) { // Skip the calculation when i = j (saves calculation time; could consider branching effects on GPU)
 				continue;
 			}
@@ -284,7 +285,7 @@ void step_serial(void) {
 	}
 	// Scale activity map values by `D / N` to normalize the histogram values and then scale by D to increase brightness
 	const float one_over_N = (float)1 / N; // Store the inverse of global variable `N` as a constant to cache value
-	for (unsigned int i = 0; i < D * D; i++) {
+	for (i = 0; i < D * D; i++) {
 		activity_map[i] *= one_over_N * D;
 	}
 	/* Finally, update the `nbody` data pointers to reference the newly calculated arrays of position data.
@@ -299,16 +300,101 @@ void step_serial(void) {
 	out_y = temp; // Reset `out_y` to a distinct piece of 'fresh' and 'empty' memory
 }
 
+/* Profiling with Visual Studio's Diagnostic Tools and PerfTips by setting breakpoints to time code segments and using
+Debug->Windows->Show Diagnostic Tools https://docs.microsoft.com/en-us/visualstudio/profiling/profiling-feature-tour?view=vs-2019
+Shows that as `N` increases the majority of time spent running the programme is spent calling the simulation step function,
+and within that the loop over `N` particles (indexed by `i`) occupies most of the compute time rather than the loop over
+the activity grid cells. This makes sense since there are far more compute steps within the `i` loop, and generally D will be
+much smaller than `N` and is effectively limited in visualisation by screen resolution.
+Therefore it is most important to parallelise the outer `i` loop. Further analysis suggests that as `N` increases further,
+the majority of time spent within each outer loop is spent iterating over the inner `j` loop of interactions between particles,
+so nested parallel loops should also be considered. Amongst all the operations/function calls within each simulation step,
+it appears that the call to the `sqrt` function in the inner loop is the most expensive. */
+
 // OpenMP version (For parallel computation on a multicore CPU)
-/* TODO: Benchmark the effects of parallelising the gravity loops (inner and outer) and the activity map normalisation loop
-with correct private/shared clauses for all variables.
-Compare techniques for avoiding race conditions when 1. summing acceleration contributions with inner loop parallel;
-2. Incrementing activity map contributions.
-Consider and compare different scheduling methods and chunk sizes. Static scheduling is expected to perform best due to
-relatively even workloads between threads (parallelisation over `i`). One thread will be idle when parallelising inner loop.
-On the OMP Atomic directive
+/* Benchmarking results for parallelising outer loop over `i` (on my 4 core personal laptop)
+Command Line Arguments | Histogram Race Handling | Scheduling | Execution Time(s)
+"16384 16 CPU -i 10" | N/A | N/A | 61.357s, 61.988s
+"16384 16 OPENMP -i 10" | Atomic | schedule(static) | 17.184s, 17.624s, 17.713s
+"16384 16 OPENMP -i 10" | Atomic | schedule(static, 1) | 17.314s, 17.399s
+"16384 16 OPENMP -i 10" | Atomic | schedule(static, 2) | 17.182s, 17.478s
+"16384 16 OPENMP -i 10" | Atomic | schedule(static, 4) | 17.225s, 17.363s
+"16384 16 OPENMP -i 10" | Atomic | schedule(static, 8) | 17.248s, 17.446s
+"16384 16 OPENMP -i 10" | Atomic | schedule(guided) | 15.769s, 16.650s, 16.830s, 17.110s
+"16384 16 OPENMP -i 10" | Atomic | schedule(dynamic) | 11.895s, 12.028s, 12.210s
+"16384 16 OPENMP -i 10" | Atomic | schedule(dynamic, 2) | 11.841s, 11.997s, 12.266s
+"16384 16 OPENMP -i 10" | Atomic | schedule(dynamic, 4) | 11.766s, 12.047s, 12.210s
+"16384 16 OPENMP -i 10" | Critical | schedule(static, 4) | 17.341s, 18.007s
+"16384 16 OPENMP -i 10" | Critical | schedule(guided) | 16.720s, 16.994s
+"16384 16 OPENMP -i 10" | Critical | schedule(dynamic) | 11.617s, 11.888s, 11.999s, 13.054s
+"8192 16 CPU -i 100" | N/A | N/A | 153.307s, 154.100s
+"8192 16 OPENMP -i 100" | Atomic | schedule(dynamic) | 29.687s, 30.332s
+"8192 16 OPENMP -i 100" | Critical | schedule(dynamic) | 28.490s, 30.305s
+"2048 16 CPU -i 1000" | N/A | N/A | 95.132s, 95.174s, 95.677s
+"2048 16 OPENMP -i 1000" | Atomic | schedule(static) | 29.240s, 29.584s
+"2048 16 OPENMP -i 1000" | Atomic | schedule(static, 4) | 29.685s, 30.073s
+"2048 16 OPENMP -i 1000" | Atomic | schedule(guided) | 29.357s, 29.521s
+"2048 16 OPENMP -i 1000" | Atomic | schedule(dynamic) | 17.910s, 18.774s
+"2048 16 OPENMP -i 1000" | Critical | schedule(dynamic) | 18.470s, 18.577s
+"512 16 CPU -i 10000" | N/A | N/A | 59.003s, 59.404s
+"512 16 OPENMP -i 10000" | Atomic | schedule(dynamic) | 12.734s, 13.735s
+"256 16 CPU -i 100000" | N/A | N/A | 148.552s, 149.194s
+"256 16 OPENMP -i 100000" | Atomic | schedule(static, 4) | 47.987s, 48.889s
+"256 16 OPENMP -i 100000" | Atomic | schedule(dynamic) | 34.568s, 36.429s
+"128 16 CPU -i 100000" | N/A | N/A | 37.436s, 37.520s
+"128 16 OPENMP -i 100000" | Atomic | schedule(static, 4) | 12.587s, 13.110s
+"128 16 OPENMP -i 100000" | Atomic | schedule(guided) | 12.448s, 12.541s
+"128 16 OPENMP -i 100000" | Atomic | schedule(dynamic) | 11.717s, 12.071s
+"64 16 CPU -i 1000000" | N/A | N/A | 92.477s, 92.617s
+"64 16 OPENMP -i 1000000" | Atomic | schedule(static, 4) | 31.302s, 32.235s
+"64 16 OPENMP -i 1000000" | Atomic | schedule(guided) | 32.292s, 33.169s
+"64 16 OPENMP -i 1000000" | Atomic | schedule(dynamic) | 38.062s, 38.133s */
+/* Initial Remarks on parallelising outer loop
+The data shows that dynamic scheduling is faster for values of `N` greater than 100 or so, but slower than static scheduling for
+smaller values on `N`, with guided scheduling always performing between to static and dynamic scheduling and never optimal. 
+This is because there is uneven workload amongst threads, which favours dynamic scheduling, but the overhead cost of dynamic 
+scheduling at runtime becomes a limiting factor for relatively small parallel loops.
+A trend of increasing OpenMP performance relative to serial CPU performance as `N` increases can also be seen as the benefits
+of parallelism outweigh their overhead costs.
+I believe the main source of difference in workload between threads arises from whether the particle `i` lies within 
+the activity grid or not. If so, a slow (atomic/critical/serial) incrementation of an activity grid cell must occur, which also
+involves writing to global memory at an index of the `activity_map` array that cannot be predicted at compile time, but if
+the particle `i` lies outside the activity grid this step can be skipped, causing an uneven workload between different threads.
+Scheduling approach seems to have a more important impact on performance than chunk size.
+On the other hand, it appears that there's no major difference in performance between using a critical section or an atomic
+directive to ensure the safe incrementation of the activity grid histogram, perhaps with only a slight leaning towards atomic.
+For reference information on the OMP Atomic directive, see the following links:
 https://www.openmp.org/spec-html/5.0/openmpsu95.html
 https://www.ibm.com/support/knowledgecenter/SSGH2K_13.1.2/com.ibm.xlc131.aix.doc/compiler_ref/prag_omp_atomic.html */
+/* Benchmarking results for parallelising inner loop over `j` only (on my 4 core personal laptop)
+Command Line Arguments | Acceleration Sum Handling | Scheduling | Execution Time(s)
+"8192 16 OPENMP -i 10" | Two Atomic Directives | schedule(static) | 54.309s
+"8192 16 OPENMP -i 10" | Two Atomic Directives | schedule(dynamic) | 49.997s
+"8192 16 OPENMP -i 10" | Critical Section | schedule(static) | 54.520s
+"8192 16 OPENMP -i 10" | Critical Section | schedule(dynamic) | 61.185s
+"256 16 OPENMP -i 10000" | Two Atomic Directives | schedule(static) | 57.011s
+"256 16 OPENMP -i 10000" | Two Atomic Directives | schedule(static, 4) | 64.039s
+"256 16 OPENMP -i 10000" | Two Atomic Directives | schedule(dynamic) | 90.021s
+"256 16 OPENMP -i 10000" | Critical Section | schedule(static) | 58.980s
+"256 16 OPENMP -i 10000" | Critical Section | schedule(dynamic) | 79.218s */
+/* Remarks on parallelising inner loop
+The data shows that only parallelising the inner `j` loop over force interactions results in a 3-4x slowdown 
+compared to the serial CPU version. This is because of repeated overheads setting up small parallel loops within a larger loop.
+The story might be different on a machine with more cores (e.g. 16 cores rather than 4 cores), but when compared to the 
+3-4x speedup over serial implementation from parallelising the outer `i` loop over bodies in the system, it is clear which is
+preferred. As a general rule, outer loops should be parallelised first (assuming they run for a reasonable number of iterations).
+Final remarks and conclusion
+Finally, through testing an implementation of nested parallel loops we find the following performance heirarchy for the given
+problem: Parallel outer loop > Serial CPU version > Parallel histogram scaling > Nested parallel loops > Parallel inner loop.
+For **nested** parallel loops with dynamic scheduling and atomic directives to avoid race conditions when 
+1) Incrementing activity map contributions; and 2) Summing acceleration contributions with the inner `j` loop parallel;
+given command line arguments "8192 16 OPENMP -i 100", an execution time of 268.809s was recorded, about 75% slower than serial. 
+In conclusion, we choose to parallelise the force calculation outer loop over `i` iterating over bodies in the system as it
+is the best and only loop parallelisation which improves on the serial CPU version (by a respectable 3-6x speedup), 
+we choose dynamic scheduling since it outperforms static and guided scheduling for values of `N` greater than around 100, where
+many feasible values of `N` lie (a separate parallel directive to choose static scheduling when N < 100 could be considered).
+Finally, to avoid race conditions when each thread uses the position of its local particle to update the shared `activity_map`
+histogram, we choose to use an atomic directive, though this only appears to be negligably better than a critical section. */
 void step_OpenMP(void) {
 	/* The index `i` is used to iterate over the `N` bodies in the system. For each body `i`, we choose to calculate the
 	`N-1` interactions of the other bodies `j != i` on `i`, as opposed to the action of `i` on all of the other bodies `j != i`.
@@ -318,6 +404,7 @@ void step_OpenMP(void) {
 	See http://www.it.uom.gr/teaching/c_optimization/tutorial.html
 	Calculating the histogram contribution of each body is far more efficient than iterating over histogram bins/grid cells
 	since we exploit the fact that each body can only be in at most one grid cell at a time (D*D times fewer calculations). */
+	int i, j; // Counter variables. OpenMP requires these to be `int` type rather than unsigned
 	float ax, ay; // Components of resultant acceleration of a particle as a result of gravitational force
 	float local_xi, local_yi; // Local position variables to reduce global memory accesses, especially during inner loop
 	float local_vxi, local_vyi; // Local velocity variables to exchange two global memory reads for one plus two local reads
@@ -327,14 +414,19 @@ void step_OpenMP(void) {
 	// Reset histogram values to zero with `memset`. See http://www.cplusplus.com/reference/cstring/memset/
 	memset(activity_map, 0, sizeof(activity_map));
 
-	for (unsigned int i = 0; i < N; i++) { // Iterating over bodies in the Nbody system
+	//omp_set_nested(1);
+#pragma omp parallel for default(none) private(i, j, ax, ay, local_xi, local_yi, x_ji, y_ji, dist_ij, local_vxi, local_vyi) shared(nbody_in, activity_map, D, out_x, out_y) schedule(dynamic)
+	for (i = 0; i < N; i++) { // Iterating over bodies in the Nbody system
 		ax = 0; // Reset resultant acceleration in `x` direction to zero for new particle
 		ay = 0; // Reset resultant acceleration in `y` direction to zero for new particle
 		// Read position data from global memory to the stack
 		local_xi = nbody_in->x[i];
 		local_yi = nbody_in->y[i];
 
-		for (unsigned int j = 0; j < N; j++) {
+// Can treat `i` as a shared variable on the inner `j` loop since we read without changing within each outer loop iteration
+// Otherwise could use `firstprivate(i)` declaration to pass in the value to each thread
+//#pragma omp parallel for default(none) private(j, x_ji, y_ji, dist_ij) shared(i, ax, ay, local_xi, local_yi, nbody_in) schedule(dynamic)
+		for (j = 0; j < N; j++) {
 			if (j == i) { // Skip the calculation when i = j (saves calculation time; could consider branching effects on GPU)
 				continue;
 			}
@@ -348,9 +440,12 @@ void step_OpenMP(void) {
 			/* Add unscaled contribution to acceleration due to gravitational force of `j` on `i`
 			Universal Gravitation: `F_ij = G * m_i * m_j * r_ji / |r_ji|^3` ; Newton's 2nd Law: F_i = m_i * a_i
 			See top of file for further explanation of calculation, physical background */
-			// If the inner `j` loop is parallel, adding to `ax[i]` will result in a race condition
+			// If the inner `j` loop is parallel, adding to `ax[i]` will result in a race condition. 
+			// Could try a reduction directive for `ax`, `ay` in the parallel inner loop directive if supported by OpenMP 2.0
+			//#pragma omp critical {
 			ax += nbody_in->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
 			ay += nbody_in->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			//}
 			/* It would be possible to add force/acceleration contributions to `nbody_in->v` directly within this inner loop.
 			However this would cause this function to be bound by memory access latency (repeated writes to `nbody_in->v`).
 			Therefore we use the temporary/local variables `ax` and `ay` instead */
@@ -384,6 +479,8 @@ void step_OpenMP(void) {
 			// Multiply position vector by `D` then truncate components to `int` to find position in \{0,...,D-1\}^{2} grid
 			// Can result in race condition when outer `i` loop parallel as multiple threads could increment at once
 			// Possible solutions: Critical section; atomic operator; move section outside parallel loop (barrier/master method)
+			/* Atomic operations can be used to safely increment a shared numeric value; critical regions have other uses too */
+			#pragma omp atomic
 			activity_map[D * (int)(D * local_yi) + (int)(D * local_xi)]++; // Linearize the index from 2D grid into 1D array
 		}
 		// Write the new position of particle `i` to the output buffers to avoid interfering with other threads/iterations
@@ -392,7 +489,14 @@ void step_OpenMP(void) {
 	}
 	// Scale activity map values by `D / N` to normalize the histogram values and then scale by D to increase brightness
 	const float one_over_N = (float)1 / N; // Store the inverse of global variable `N` as a constant to cache value
-	for (unsigned int i = 0; i < D * D; i++) {
+	/* Parallelising this histogram scaling loop actually has a negative impact on performance due to fork/join overheads
+	outweighing the small gains from parallelising a non-compute intensive loop. Using command line arguments (release mode)
+	"2048 1024 OPENMP -i 100" we reliably time 9.8 seconds for serial execution vs 11.5s-11.9s with this loop parallel 
+	and using static or guided scheduling (chunk size has little effect) and 14.5s-14.9s for dynamic scheduling. 
+	The reason dynamic scheduling is even slower than static scheduling is the extra runtime overheads of dynamic scheduling
+	where the workloads are extremely uniform (two multiplications per loop) */
+//#pragma omp parallel for default(none) private(i) shared(activity_map, one_over_N, D) schedule(dynamic)
+	for (i = 0; i < D * D; i++) {
 		activity_map[i] *= one_over_N * D;
 	}
 	/* Finally, update the `nbody` data pointers to reference the newly calculated arrays of position data.
