@@ -420,3 +420,16 @@ dkms.conf
 *.ptx
 *.cubin
 *.fatbin
+
+# Keep visualisation libraries
+!freeglut.lib
+!glew32.lib
+!freeglut.dll
+!glew32.dll
+!source/repos/Assignment1/Debug/
+!source/repos/Assignment1/Release/
+!source/repos/Assignment2/lib/x64/
+!source/repos/Assignment2/Debug/
+!source/repos/Assignment2/Release/
+!source/repos/Assignment2/Debug/x64/
+!source/repos/Assignment2/Release/x64/
