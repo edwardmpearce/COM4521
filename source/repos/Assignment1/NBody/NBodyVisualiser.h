@@ -27,7 +27,7 @@
  */
 
 /** initViewer
-	* initViewer must be the first call to this module. It will configure and allocate any data required for the visualiser.
+	* `initViewer` must be the first call to this module. It will configure and allocate any data required for the visualiser.
 	* @param	N	The NBody population size
 	* @param	D	The width/height of the activity map grid
 	* @param	M	The simulation mode. This must be `CPU` or `OpenMP` for Part 1 of the assignment
@@ -36,7 +36,7 @@
 void initViewer(unsigned int N, unsigned int D, MODE m, void (*simulate)(void));
 
 /** setNBodyPositions2f
-	* A user should pass a pointer to the NBody position data using either this function or `setNBodyPositions`
+	* A user should pass pointers to the NBody `x` and `y` position data using either this function or `setNBodyPositions`
 	* @param	positions_x	A pointer to a float array of length `N` containing the `x` position of bodies
 	* @param	positions_y	A pointer to a float array of length `N` containing the `y` position of bodies
 	*/
@@ -58,7 +58,10 @@ void setActivityMapData(const float *activity);
 void setHistogramData(const float *densities);
 
 /** startVisualisationLoop
-	* Starts the main visualisation loop which will send calls to your `simulate` function
+	* Starts the main visualisation loop which will send calls to your `simulate` function and perform rendering.
+	* Key 'd' can be used to toggle rendering of the activity map.
+	* Key 'b' can be used to toggle rendering of the bodies.
+	* Escape `Esc` key or `q` key can be used to exit.
 	*/
 void startVisualisationLoop();
 

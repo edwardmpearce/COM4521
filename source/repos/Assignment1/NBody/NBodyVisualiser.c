@@ -156,7 +156,7 @@ void displayLoop(void) {
 		printf("Error: CUDA Mode Rendering Not Supported for Part 1\n");
 	}
 	else { // CPU or OPENMP
-		// Map buffer to positions Texture Buffer Object and copy data to it from user supplied pointer
+		// Map buffer to Texture Buffer Object for Nbody positions and copy data to it from user supplied pointer
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, tbo_nbody);
 		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	// `tbo_nbody` buffer
 		if (dptr == 0) {
@@ -182,7 +182,7 @@ void displayLoop(void) {
 
 		// Map histogram buffer to positions Texture Body Object and copy data to it from user supplied pointer
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, tbo_hist);
-		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	// `tbo_nbody` buffer
+		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	// `tbo_hist` buffer
 		if (dptr == 0) {
 			printf("Error: Unable to map Histogram Texture Buffer Object\n");
 			return;
@@ -289,15 +289,15 @@ void initHistVertexData() {
 	// Create buffer object (all vertex positions normalised between -0.5 and +0.5)
 	glGenBuffers(1, &vao_hist_vertices);
 	glBindBuffer(GL_ARRAY_BUFFER, vao_hist_vertices);
-	glBufferData(GL_ARRAY_BUFFER, D*D * 4 * 3 * sizeof(float), 0, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, D * D * 4 * 3 * sizeof(float), 0, GL_STATIC_DRAW);
 	float* verts = (float*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 	float quad_size = 1.0f / D;
 	for (unsigned int y = 0; y < D; y++) {
 		for (unsigned int x = 0; x < D; x++) {
 			int offset = (D * y + x) * 3 * 4;
 
-			float x_min = (float)x / (float)(D);
-			float y_min = (float)y / (float)(D);
+			float x_min = (float)x / D;
+			float y_min = (float)y / D;
 
 			// First vertex
 			verts[offset + 0] = x_min - 0.5f;
@@ -413,7 +413,6 @@ void initNBodyVertexData() {
 	checkGLError();
 
 	/* Texture Buffer Object */
-
 	glGenBuffers(1, &tbo_nbody);
 	glBindBuffer(GL_TEXTURE_BUFFER, tbo_nbody);
     glBufferData(GL_TEXTURE_BUFFER, N * 2 * sizeof(float), 0, GL_DYNAMIC_DRAW);	// 2 `float` elements in a texture buffer object for x and y position
