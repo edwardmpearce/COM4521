@@ -1,7 +1,8 @@
-/* Assignment 1 Program
-This program implements an N-body simulation and visualization on a CPU, along with code for benchmarking performance.
-We implement both a serial CPU version, and a version for multi-core processors using OpenMP.
-The accompanying report provides discussion on design considerations regarding performance optimization and validation. */
+/* Assignment 2 Program
+Building upon the code written for assignment 1, this program implements GPU code for N-body simulation and visualization.
+In total, we implement a serial CPU version, an OpenMP version for multicore processors, and a CUDA version for Nvidia GPUs.
+Timing code is also included for benchmarking performance.
+The accompanying report provides discussion on design considerations regarding performance optimization and validation.  */
 /* Problem Description
 We consider a system of N bodies in frictionless 2D space exerting gravitational force on each other.
 See https://en.wikipedia.org/wiki/N-body_problem for further background on the physics of the N-body problem.
@@ -27,12 +28,14 @@ and enable the compiler to use the OpenMP runtime.
 Set 'OpenMP Support' to 'Yes' (for both Debug and Release builds) in Project->Properties->C/C++->Language
 Add `_CRT_SECURE_NO_WARNINGS` to 'Preprocessor Definitions' in Project->Properties->C/C++->Preprocessor */
 #include <omp.h>
+#include <cuda_runtime.h>
 /* Local header files */
 #include "NBody.h"
 #include "NBodyVisualiser.h"
 /* Preprocessor definitions/macros */
 #define USER_NAME "smp16emp" // Replace with your username
 #define BUFFER_SIZE 128 // Maximum line length accepted from input file (reasonable as only 5 (comma separated) floating point numbers expected)
+#define THREADS_PER_BLOCK 256
 /* Function declarations/prototypes */
 void print_help();
 void parseNDM(const char* argv[3]);
@@ -43,16 +46,17 @@ void read_nbody_file(const char* filename, const int N);
 void checkLastError(const char* msg);
 void step_serial(void);
 void step_OpenMP(void);
+void step_CUDA(void);
 void swap_float_pointers(float** p1, float** p2);
 /* Global variables (shared by/used in multiple functions) */
 /* Command line inputs */
 unsigned int N; // Number of bodies in the system
 unsigned int D; // Dimension of the activity grid
-MODE M; // Operation mode. Allows CPU = 0, OPENMP = 1, CUDA = 2, but CUDA mode simulation and rendering not supported in part 1
+MODE M; // Operation mode. Allows CPU = 0, OPENMP = 1, CUDA = 2
 unsigned int I = 0; // Number of iterations of the simulation to calculate when the `-i` flag is set, else 0
 unsigned int f_flag = 0; // Input file flag. 0 if not specified, else such that `input_filename = options[f_flag]` in `main`.
 /* Data buffers */
-nbody_soa* nbody_in; // Pointer to a structure of arrays (preferred over an array of structures for coalesced memory access)
+nbody_soa* h_nbodies; // Pointer to a structure of arrays (preferred over an array of structures for coalesced memory access)
 /* Separate output buffers for updated particle positions are required to avoid interference between loop iterations/threads
 when calculating forces based on current particle positions. Buffers for output velocity components are not required 
 because a given particle's velocity is only used to calculate its own new position and nothing else. However this requires
@@ -61,9 +65,85 @@ Pointer swapping can be used to reduce memory copying between multiple buffers w
 See https://en.wikipedia.org/wiki/Multiple_buffering for more on double/multiple buffering 
 The visualiser only (re)reads position data once after each time the simulation `step` function completes, 
 rather than throughout the whole `step` calculation process, so the particles update positions in sync anyway */
+/* Whether the following three pointers are host pointers or device pointers will depend on the operation mode */
 float* out_x; // Pointer to store the new `x` coordinate of each body before updating in sync after loops complete
 float* out_y; // Pointer to store the new `y` coordinate of each body before updating in sync after loops complete
 float* activity_map; // Pointer to flattened array of D*D float values storing normalised particle density values in a 2D grid
+/* Device pointers */
+nbody_soa* d_nbodies; // Device pointer for nbody data
+
+/* Device Functions and Kernels */
+__device__ void swap_float_pointers(float** p1, float** p2) {
+	// Function arguments are always passed by value, so to swap two pointers, we must pass references to those pointers
+	// The arguments `p1` and `p2` are actually addresses of pointers to `float` data (rather than the pointers themselves)
+	float* temp = *p1; // Set `temp` to be the pointer referenced by p1
+	*p1 = *p2; // Overwrite the pointer addressed by `p1` with the pointer addressed by `p2`
+	*p2 = temp; // Overwrite the pointer addressed by `p2` with the pointer addressed by `temp` (originally addressed by `p1`)
+}
+
+__global__ void simulation_kernel(const unsigned int N, const unsigned int D) {
+	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; // Iterating over bodies in the Nbody system, one thread per body
+	if (i < N) { // One unique index for each body and any leftover threads stay idle
+		float ax = 0, ay = 0; // Initialise resultant acceleration to zero
+		// Read position data from global/constant/texture memory to thread-local stack variables
+		float local_xi = d_nbodies->x[i];
+		float local_yi = d_nbodies->y[i];
+		// Calculate the acceleration of body `i` due to gravitational force from the other bodies
+		for (unsigned int j = 0; j < N; j++) { 
+			if (j == i) { // Skip the calculation when i = j
+				continue;
+			}
+			// Calculate displacement from particle `i` to particle `j`, since common expression in force equation
+			float x_ji = d_nbodies->x[j] - local_xi;
+			float y_ji = d_nbodies->y[j] - local_yi;
+			// Calculate distance from `i` to `j` with softening factor since used in denominator of force expression
+			// Single precision square root: https://docs.nvidia.com/cuda/cuda-math-api/group__CUDA__MATH__SINGLE.html
+			float dist_ij = sqrtf(x_ji * x_ji + y_ji * y_ji + eps_sq);
+			/* Add unscaled contribution to acceleration due to gravitational force of `j` on `i`
+			Universal Gravitation: `F_ij = G * m_i * m_j * r_ji / |r_ji|^3` ; Newton's 2nd Law: F_i = m_i * a_i */
+			ax += d_nbodies->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			ay += d_nbodies->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			/* It would be possible to add force/acceleration contributions to `d_nbodies->v` directly within this inner loop.
+			However this would cause this function to be bound by memory access latency (repeated writes to `d_nbodies->v`).
+			Therefore we use the temporary/local variables `ax` and `ay` instead */
+		}
+		/* Use current velocity, acceleration to calculate position, velocity at next time step, respectively. */
+		float local_vxi = d_nbodies->vx[i];
+		float local_vyi = d_nbodies->vy[i];
+		// Care has to be taken about the order of execution to ensure the output positions are calculated correctly
+		// Use current velocity to calculate next position
+		local_xi += local_vxi * dt;
+		local_yi += local_vyi * dt;
+		// Now the local position variables hold the new positions and can be used to update the activity map
+
+		// Use current acceleration (based on current positions) to calculate the new velocity
+		// Scale `ax`, `ay` by gravitational constant `G`. See `NBody.h` for definition and comment.
+		d_nbodies->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `d_nbodies->vx[i]`
+		d_nbodies->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `d_nbodies->vy[i]`
+		// We can update particle velocities in-place without adversely affecting subsequent iterations/other threads
+
+		// Write the new position of particle `i` to the output buffers to avoid interfering with other threads
+		out_x[i] = local_xi;
+		out_y[i] = local_yi;
+		// Pointer swapping of position data occurs outside of the kernel launch in the `step_CUDA` function
+
+		// Update the activity map - a flat array of D*D float values storing normalised particle density values in a 2D grid
+		// First check whether the new position of particle `i` is within the activity grid [0,1)^{2}. Branching thread logic.
+		if ((local_xi >= 0) && (local_xi < 1) && (local_yi >= 0) && (local_yi < 1)) {
+			// If so, calculate the index of the grid element that particle `i` is in
+			// Multiply position vector by `D` then truncate components to `int` to find position in \{0,...,D-1\}^{2} grid
+			unsigned int index = D * (int)(D * local_yi) + (int)(D * local_xi); // Linearize the index from 2D grid into 1D array
+
+			// Increase the associated histogram bin by the normalised quantity `D/N` (scaling by D to increase brightness)
+			// Can result in race condition as multiple threads could increment at once. Could solve with `atomicAdd`
+			activity_map[index] += (float) D / N; 
+			// Unfortunately this is a random access (write) to global memory and cannot easily be coalesced
+			/* We choose not to reduce the number of multiplication/division operations by incrementing the histogram bin by one
+			at this step and then scaling the histogram counts in a separate loop (as in the other implementations) in order to
+			avoid launching a separate grid/kernel with D^2 threads, thus reducing the number of kernel launchs */
+		}
+	}
+}
 
 /* For information on how to parse command line parameters, see http://www.cplusplus.com/articles/DEN36Up4/ 
 `argc` in the count of the command arguments, and `argv` is an array (of length `argc`) of the arguments. 
@@ -99,8 +179,7 @@ int main(const int argc, const char *argv[]) {
 		printf("OpenMP using %d threads\n", omp_get_max_threads());
 		break;
 	case CUDA:
-		fprintf(stderr, "Error: CUDA Mode simulation not supported until assignment 2!\n");
-		exit(EXIT_FAILURE);
+		simulate = &step_CUDA;
 		break;
 	}
 
@@ -110,92 +189,156 @@ int main(const int argc, const char *argv[]) {
 	const unsigned int activity_grid_size = sizeof(float) * D * D;
 
 	// Memory allocation. See http://www.cplusplus.com/reference/cstdlib/malloc/
-	nbody_in = (nbody_soa*)malloc(sizeof(nbody_soa));
-	nbody_in->x = (float*)malloc(data_column_size);
-	nbody_in->y = (float*)malloc(data_column_size);
+	h_nbodies = (nbody_soa*)malloc(sizeof(nbody_soa));
+	h_nbodies->x = (float*)malloc(data_column_size);
+	h_nbodies->y = (float*)malloc(data_column_size);
     // Allocates memory block for length N array of floats, and initialize all bits to zero (for default zero initial velocity).
 	// See http://www.cplusplus.com/reference/cstdlib/calloc/
-	nbody_in->vx = (float*)calloc(N, sizeof(float)); // Zero initial velocity
-	nbody_in->vy = (float*)calloc(N, sizeof(float)); // Zero initial velocity
-	nbody_in->m = (float*)malloc(data_column_size);
-	if ((nbody_in == NULL) || (nbody_in->x == NULL) || (nbody_in->y == NULL) || (nbody_in->vx == NULL) || (nbody_in->vy == NULL) || (nbody_in->m == NULL)) {
-		fprintf(stderr, "Error allocating host memory (`nbody_in`) for system with %d bodies\n", N);
+	h_nbodies->vx = (float*)calloc(N, sizeof(float)); // Zero initial velocity
+	h_nbodies->vy = (float*)calloc(N, sizeof(float)); // Zero initial velocity
+	h_nbodies->m = (float*)malloc(data_column_size);
+	if ((h_nbodies == NULL) || (h_nbodies->x == NULL) || (h_nbodies->y == NULL) || (h_nbodies->vx == NULL) || (h_nbodies->vy == NULL) || (h_nbodies->m == NULL)) {
+		fprintf(stderr, "Error allocating host memory (`h_nbodies`) for system with %d bodies\n", N);
 		exit(EXIT_FAILURE);
 	}
-	out_x = (float*)malloc(data_column_size);
-	out_y = (float*)malloc(data_column_size);
-	if ((out_x == NULL) || (out_y == NULL)) {
-		fprintf(stderr, "Error allocating host memory (output position buffers) for system with %d bodies\n", N);
-		exit(EXIT_FAILURE);
+	if (M == CUDA) {
+		/* Allocate device memory */
+		cudaMalloc((void**)&d_nbodies, sizeof(nbody_soa));
+		cudaMalloc((void**)&d_nbodies->x, data_column_size);
+		cudaMalloc((void**)&d_nbodies->y, data_column_size);
+		cudaMalloc((void**)&d_nbodies->vx, data_column_size);
+		cudaMalloc((void**)&d_nbodies->vy, data_column_size);
+		cudaMalloc((void**)&d_nbodies->m, data_column_size);
+		cudaMalloc((void**)&out_x, data_column_size);
+		cudaMalloc((void**)&out_y, data_column_size);
+		cudaMalloc((void**)&activity_map, activity_grid_size);
+		checkCUDAError("Memory allocation on device with cudaMalloc");
 	}
-	activity_map = (float*)malloc(activity_grid_size);
-	if (activity_map == NULL) {
-		fprintf(stderr, "Error allocating host memory (`activity map`) for system with %d bodies, activity grid size %d\n", N, D);
-		exit(EXIT_FAILURE);
+	else { // Whether `out_x`, `out_y`, and `activity_map` are pointers on the host or device depends on operation mode
+		out_x = (float*)malloc(data_column_size);
+		out_y = (float*)malloc(data_column_size);
+		if ((out_x == NULL) || (out_y == NULL)) {
+			fprintf(stderr, "Error allocating host memory (output position buffers) for system with %d bodies\n", N);
+			exit(EXIT_FAILURE);
+		}
+		activity_map = (float*)malloc(activity_grid_size);
+		if (activity_map == NULL) {
+			fprintf(stderr, "Error allocating host memory (`activity map`) for system with %d bodies, activity grid size %d\n", N, D);
+			exit(EXIT_FAILURE);
+		}
 	}
 
-	/* Read initial data from file, or generate random initial state according to optional program flag `-f`. */
+	/* Read initial data from file to host memory, or generate random initial state according to optional program flag `-f`. */
 	if (f_flag == 0) { // No input file specified, so a random initial N-body state will be generated
 		const float one_over_N = (float)1 / N; // Store the inverse of `N` as a constant to avoid recalculating in loop
 		for (unsigned int i = 0; i < N; i++) {
-			nbody_in->x[i] = (float)rand() / RAND_MAX; // Random position in [0,1]
-			nbody_in->y[i] = (float)rand() / RAND_MAX; // Random position in [0,1]
-			nbody_in->m[i] = one_over_N; // Mass distributed equally among N bodies
+			h_nbodies->x[i] = (float)rand() / RAND_MAX; // Random position in [0,1]
+			h_nbodies->y[i] = (float)rand() / RAND_MAX; // Random position in [0,1]
+			h_nbodies->m[i] = one_over_N; // Mass distributed equally among N bodies
 			// Note that velocity data has already been initialized to zero for all bodies
 		}
 	}
-	else { // Attempt to read initial N-body system state from input csv file
+	else { // Attempt to read initial N-body system state from input csv file to host memory
 		read_nbody_file(argv[f_flag], N);
+	}
+
+	if (M == CUDA) {
+	/* Copy the host input values in `h_nbodies` to the device memory `d_nbodies`. */
+		cudaMemcpy(d_nbodies->x, h_nbodies->x, data_column_size, cudaMemcpyHostToDevice);
+		cudaMemcpy(d_nbodies->y, h_nbodies->y, data_column_size, cudaMemcpyHostToDevice);
+		cudaMemcpy(d_nbodies->vx, h_nbodies->vx, data_column_size, cudaMemcpyHostToDevice);
+		cudaMemcpy(d_nbodies->vy, h_nbodies->vy, data_column_size, cudaMemcpyHostToDevice);
+		cudaMemcpy(d_nbodies->m, h_nbodies->m, data_column_size, cudaMemcpyHostToDevice);
+		checkCUDAError("Input transfer to device");
 	}
 
 	/* According to the value of program argument `I` either configure and start the visualiser, 
 	or perform a fixed number of simulation steps and output the timing results. */
 	if (I == 0) { // Run visualiser when number of iterations not specified with `-i` flag, or otherwise `I` was set to 0
 		initViewer(N, D, M, simulate); // The simulation step function has been set earlier according to operation mode `M`
-		setNBodyPositions(nbody_in); // This is where the visualiser will check for particle position data after each iteration
+		// Set where the visualiser will check for particle position data after each iteration
+		if (M == CUDA) {
+			setNBodyPositions(d_nbodies); // Device pointer
+		}
+		else {
+			setNBodyPositions(h_nbodies); // Host pointer
+		}
 		setActivityMapData(activity_map); // This is where the visualiser will check for activity data after each iteration
 		startVisualisationLoop();
 	}
 	else { // Run the simulation for `I` iterations and output the timing results
-		// Declare timing variables
-		clock_t t; // Clock ticks for serial CPU timing
-		double start, end; // Timestamps for OpenMP timing
-		double seconds = 0; // Variable to hold execution timing results
-		switch (M) {
+		switch (M) { // Simulation and timing methods depend on operation mode
 		case CPU:
+			clock_t t; // Clock ticks for serial CPU timing
+			double seconds = 0; // Variable to hold execution timing results
 			t = clock(); // Starting timestamp. See http://www.cplusplus.com/reference/ctime/clock/
 			for (unsigned int i = 0; i < I; i++) {
 				step_serial();
 			}
 			t = clock() - t; // Take end timestamp and calculate difference from start in clock ticks
 			seconds = (double)t / CLOCKS_PER_SEC;
+			printf("Execution time %d seconds %d milliseconds for %d iterations\n", (int)seconds, (int)((seconds - (int)seconds) * 1000), I);
 			break;
 		case OPENMP:
+			double start, end; // Timestamps for OpenMP timing
+			double seconds = 0; // Variable to hold execution timing results
 			start = omp_get_wtime(); // Starting timestamp. See https://www.openmp.org/spec-html/5.0/openmpsu160.html
 			for (unsigned int i = 0; i < I; i++) {
 				step_OpenMP();
 			}
 			end = omp_get_wtime();
 			seconds = end - start;
+			printf("Execution time %d seconds %d milliseconds for %d iterations\n", (int)seconds, (int)((seconds - (int)seconds) * 1000), I);
 			break;
 		case CUDA:
-			fprintf(stderr, "Error: CUDA Mode simulation not supported until assignment 2!\n");
-			exit(EXIT_FAILURE);
+			cudaEvent_t cuda_start, cuda_stop; // CUDA Event timers
+			float milliseconds = 0; // Timing results variable (must be `float` type for call to `cudaEventElapsedTime`)
+			cudaEventCreate(&cuda_start); cudaEventCreate(&cuda_stop); // Create CUDA Events
+			cudaEventRecord(cuda_start); // Record the start time before calling the kernel launching simulation function
+			for (unsigned int i = 0; i < I; i++) {
+				step_CUDA();
+			}
+			cudaEventRecord(cuda_stop); // Record the stop time once the simulation has finished
+			cudaEventSynchronize(cuda_stop); // Ensure stop time has finished recording before continuing
+			checkCUDAError("Error running simulation kernel\n");
+			cudaEventElapsedTime(&milliseconds, cuda_start, cuda_stop);	// Write the elapsed time to `milliseconds`
+			printf("Execution time %d seconds %d milliseconds for %d iterations\n", (int)milliseconds / 1000, (int)milliseconds % 1000, I);
+			cudaEventDestroy(cuda_start); cudaEventDestroy(cuda_stop); // Cleanup CUDA Event timers
+			/* Copy the device output values in `d_nbodies` to the host memory `h_nbodies` then write to file for validation.
+			cudaMemcpy(h_nbodies->x, d_nbodies->x, data_column_size, cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_nbodies->y, d_nbodies->y, data_column_size, cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_nbodies->vx, d_nbodies->vx, data_column_size, cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_nbodies->vy, d_nbodies->vy, data_column_size, cudaMemcpyDeviceToHost);
+			checkCUDAError("Copying final Nbody system state from device to host"); 
+			*/
 			break;
 		}
-		printf("Execution time %d seconds %d milliseconds for %d iterations\n", (int)seconds, (int)((seconds-(int)seconds)*1000), I);
 	}
 
 	// Cleanup
-	free(nbody_in->x);
-	free(nbody_in->y);
-	free(nbody_in->vx);
-	free(nbody_in->vy);
-	free(nbody_in->m);
-	free(nbody_in);
-	free(out_x);
-	free(out_y);
-	free(activity_map);
+	if (M == CUDA) {
+		cudaFree(d_nbodies->x);
+		cudaFree(d_nbodies->y);
+		cudaFree(d_nbodies->vx);
+		cudaFree(d_nbodies->vy);
+		cudaFree(d_nbodies->m);
+		cudaFree(d_nbodies);
+		cudaFree(out_x);
+		cudaFree(out_y);
+		cudaFree(activity_map);
+		checkCUDAError("Freeing memory from device with cudaFree");
+	}
+	else { // Whether `out_x`, `out_y`, and `activity_map` are pointers on the host or device depends on operation mode
+		free(out_x);
+		free(out_y);
+		free(activity_map);
+	}
+	free(h_nbodies->x);
+	free(h_nbodies->y);
+	free(h_nbodies->vx);
+	free(h_nbodies->vy);
+	free(h_nbodies->m);
+	free(h_nbodies);
 
 	return 0;
 }
@@ -225,8 +368,8 @@ void step_serial(void) {
 		ax = 0; // Reset resultant acceleration in `x` direction to zero for new particle
 		ay = 0; // Reset resultant acceleration in `y` direction to zero for new particle
 		// Read position data from global memory to the stack
-		local_xi = nbody_in->x[i];
-		local_yi = nbody_in->y[i];
+		local_xi = h_nbodies->x[i];
+		local_yi = h_nbodies->y[i];
 
 		for (j = 0; j < N; j++) {
 			if (j == i) { // Skip the calculation when i = j (saves calculation time; could consider branching effects on GPU)
@@ -234,30 +377,30 @@ void step_serial(void) {
 			}
 			// Calculate displacement from particle `i` to particle `j`, since common expression in force equation
 			// Using local variables for `x[i]`, `y[i]` here removes a global memory read from each inner loop iteration
-			x_ji = nbody_in->x[j] - local_xi;
-			y_ji = nbody_in->y[j] - local_yi;
+			x_ji = h_nbodies->x[j] - local_xi;
+			y_ji = h_nbodies->y[j] - local_yi;
 			// Calculate distance from `i` to `j` with softening factor since used in denominator of force expression
 			// Explicit casting required since `sqrt` function expects `double` type input and output; operation execution order
 			dist_ij = (float)sqrt((double)x_ji * x_ji + (double)y_ji * y_ji + eps_sq);
 			/* Add unscaled contribution to acceleration due to gravitational force of `j` on `i`
 			Universal Gravitation: `F_ij = G * m_i * m_j * r_ji / |r_ji|^3` ; Newton's 2nd Law: F_i = m_i * a_i
 			See top of file for further explanation of calculation, physical background */
-			ax += nbody_in->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
-			ay += nbody_in->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
-			/* It would be possible to add force/acceleration contributions to `nbody_in->v` directly within this inner loop.
-			However this would cause this function to be bound by memory access latency (repeated writes to `nbody_in->v`).
+			ax += h_nbodies->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			ay += h_nbodies->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			/* It would be possible to add force/acceleration contributions to `h_nbodies->v` directly within this inner loop.
+			However this would cause this function to be bound by memory access latency (repeated writes to `h_nbodies->v`).
 			Therefore we use the temporary/local variables `ax` and `ay` instead */
 		}
 		/* Use current velocity, acceleration to calculate position, velocity at next time step, respectively. */
 		/* Former code uses extra heap memory buffers for velocity, adding extra steps pointer swapping and using more memory
 		However this implementation scores highly for readability, as it makes the intended outcome clear (no race conditions)
-		out_x[i] = nbody_in->x[i] + nbody_in->vx[i] * dt;
-		out_y[i] = nbody_in->y[i] + nbody_in->vy[i] * dt;
-		out_vx[i] = nbody_in->vx[i] + G * ax * dt;
-		out_vy[i] = nbody_in->vy[i] + G * ay * dt; */
+		out_x[i] = h_nbodies->x[i] + h_nbodies->vx[i] * dt;
+		out_y[i] = h_nbodies->y[i] + h_nbodies->vy[i] * dt;
+		out_vx[i] = h_nbodies->vx[i] + G * ax * dt;
+		out_vy[i] = h_nbodies->vy[i] + G * ay * dt; */
 		// Using local velocity variables also reduces global memory reads, but only marginally compared `local_xi`, `local_yi`
-		local_vxi = nbody_in->vx[i];
-		local_vyi = nbody_in->vy[i];
+		local_vxi = h_nbodies->vx[i];
+		local_vyi = h_nbodies->vy[i];
 		// More care has to be taken about the order of execution to ensure the output positions are calculated correctly
 		// Use current velocity to calculate next position
 		local_xi += local_vxi * dt;
@@ -265,8 +408,8 @@ void step_serial(void) {
 		// Now the local position variables hold the new positions and can be used to update the activity map
 		// Use current acceleration (based on current positions) to calculate the new velocity
 		// Scale `ax`, `ay` by gravitational constant `G`. See `NBody.h` for definition and comment.
-		nbody_in->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `nbody_in->vx[i]`
-		nbody_in->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `nbody_in->vy[i]`
+		h_nbodies->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `h_nbodies->vx[i]`
+		h_nbodies->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `h_nbodies->vy[i]`
 		// We can update particle velocities in-place without adversely affecting subsequent iterations/other threads
 
 		// Update the activity map - a flat array of D*D float values storing normalised particle density values in a 2D grid
@@ -292,11 +435,11 @@ void step_serial(void) {
 	We swap the input and output pointers rather than simply overwriting the input pointers because that would result
 	in losing the original input pointers, losing allocated heap memory addresses and causing a memory leak! */
 	float* temp; // Declare a temporary pointer to `float` to hold addresses whilst swapping the input and output pointers
-	temp = nbody_in->x; // Keep track of the old input pointer for later use so we don't lose any allocated memory
-	nbody_in->x = out_x; // Update the `nbody_in->x` pointer which is used for visualisation, and the next `step` iteration
+	temp = h_nbodies->x; // Keep track of the old input pointer for later use so we don't lose any allocated memory
+	h_nbodies->x = out_x; // Update the `h_nbodies->x` pointer which is used for visualisation, and the next `step` iteration
 	out_x = temp; // Reset `out_x` to a 'fresh', 'empty' piece of memory
-	temp = nbody_in->y; // Keep track of the old input pointer for later use so we don't lose any allocated memory
-	nbody_in->y = out_y; // Update the `nbody_in->y` pointer which is used for visualisation, and the next `step` iteration
+	temp = h_nbodies->y; // Keep track of the old input pointer for later use so we don't lose any allocated memory
+	h_nbodies->y = out_y; // Update the `h_nbodies->y` pointer which is used for visualisation, and the next `step` iteration
 	out_y = temp; // Reset `out_y` to a distinct piece of 'fresh' and 'empty' memory
 }
 
@@ -415,25 +558,25 @@ void step_OpenMP(void) {
 	memset(activity_map, 0, sizeof(activity_map));
 
 	//omp_set_nested(1);
-#pragma omp parallel for default(none) private(i, j, ax, ay, local_xi, local_yi, x_ji, y_ji, dist_ij, local_vxi, local_vyi) shared(nbody_in, activity_map, D, out_x, out_y) schedule(dynamic)
+#pragma omp parallel for default(none) private(i, j, ax, ay, local_xi, local_yi, x_ji, y_ji, dist_ij, local_vxi, local_vyi) shared(h_nbodies, activity_map, D, out_x, out_y) schedule(dynamic)
 	for (i = 0; i < N; i++) { // Iterating over bodies in the Nbody system
 		ax = 0; // Reset resultant acceleration in `x` direction to zero for new particle
 		ay = 0; // Reset resultant acceleration in `y` direction to zero for new particle
 		// Read position data from global memory to the stack
-		local_xi = nbody_in->x[i];
-		local_yi = nbody_in->y[i];
+		local_xi = h_nbodies->x[i];
+		local_yi = h_nbodies->y[i];
 
 // Can treat `i` as a shared variable on the inner `j` loop since we read without changing within each outer loop iteration
 // Otherwise could use `firstprivate(i)` declaration to pass in the value to each thread
-//#pragma omp parallel for default(none) private(j, x_ji, y_ji, dist_ij) shared(i, ax, ay, local_xi, local_yi, nbody_in) schedule(dynamic)
+//#pragma omp parallel for default(none) private(j, x_ji, y_ji, dist_ij) shared(i, ax, ay, local_xi, local_yi, h_nbodies) schedule(dynamic)
 		for (j = 0; j < N; j++) {
 			if (j == i) { // Skip the calculation when i = j (saves calculation time; could consider branching effects on GPU)
 				continue;
 			}
 			// Calculate displacement from particle `i` to particle `j`, since common expression in force equation
 			// Using local variables for `x[i]`, `y[i]` here removes a global memory read from each inner loop iteration
-			x_ji = nbody_in->x[j] - local_xi;
-			y_ji = nbody_in->y[j] - local_yi;
+			x_ji = h_nbodies->x[j] - local_xi;
+			y_ji = h_nbodies->y[j] - local_yi;
 			// Calculate distance from `i` to `j` with softening factor since used in denominator of force expression
 			// Explicit casting required since `sqrt` function expects `double` type input and output; operation execution order
 			dist_ij = (float)sqrt((double)x_ji * x_ji + (double)y_ji * y_ji + eps_sq);
@@ -443,23 +586,23 @@ void step_OpenMP(void) {
 			// If the inner `j` loop is parallel, adding to `ax[i]` will result in a race condition. 
 			// Could try a reduction directive for `ax`, `ay` in the parallel inner loop directive if supported by OpenMP 2.0
 			//#pragma omp critical {
-			ax += nbody_in->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
-			ay += nbody_in->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			ax += h_nbodies->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			ay += h_nbodies->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
 			//}
-			/* It would be possible to add force/acceleration contributions to `nbody_in->v` directly within this inner loop.
-			However this would cause this function to be bound by memory access latency (repeated writes to `nbody_in->v`).
+			/* It would be possible to add force/acceleration contributions to `h_nbodies->v` directly within this inner loop.
+			However this would cause this function to be bound by memory access latency (repeated writes to `h_nbodies->v`).
 			Therefore we use the temporary/local variables `ax` and `ay` instead */
 		}
 		/* Use current velocity, acceleration to calculate position, velocity at next time step, respectively. */
 		/* Former code uses extra heap memory buffers for velocity, adding extra steps pointer swapping and using more memory
 		However this implementation scores highly for readability, as it makes the intended outcome clear (no race conditions)
-		out_x[i] = nbody_in->x[i] + nbody_in->vx[i] * dt;
-		out_y[i] = nbody_in->y[i] + nbody_in->vy[i] * dt;
-		out_vx[i] = nbody_in->vx[i] + G * ax * dt;
-		out_vy[i] = nbody_in->vy[i] + G * ay * dt; */
+		out_x[i] = h_nbodies->x[i] + h_nbodies->vx[i] * dt;
+		out_y[i] = h_nbodies->y[i] + h_nbodies->vy[i] * dt;
+		out_vx[i] = h_nbodies->vx[i] + G * ax * dt;
+		out_vy[i] = h_nbodies->vy[i] + G * ay * dt; */
 		// Using local velocity variables also reduces global memory reads, but only marginally compared `local_xi`, `local_yi`
-		local_vxi = nbody_in->vx[i];
-		local_vyi = nbody_in->vy[i];
+		local_vxi = h_nbodies->vx[i];
+		local_vyi = h_nbodies->vy[i];
 		// More care has to be taken about the order of execution to ensure the output positions are calculated correctly
 		// Use current velocity to calculate next position
 		local_xi += local_vxi * dt;
@@ -467,8 +610,8 @@ void step_OpenMP(void) {
 		// Now the local position variables hold the new positions and can be used to update the activity map
 		// Use current acceleration (based on current positions) to calculate the new velocity
 		// Scale `ax`, `ay` by gravitational constant `G`. See `NBody.h` for definition and comment.
-		nbody_in->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `nbody_in->vx[i]`
-		nbody_in->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `nbody_in->vy[i]`
+		h_nbodies->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `h_nbodies->vx[i]`
+		h_nbodies->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `h_nbodies->vy[i]`
 		// We can update particle velocities in-place without adversely affecting subsequent iterations/other threads
 
 		// Update the activity map - a flat array of D*D float values storing normalised particle density values in a 2D grid
@@ -503,20 +646,34 @@ void step_OpenMP(void) {
 	We swap the input and output pointers rather than simply overwriting the input pointers because that would result
 	in losing the original input pointers, losing allocated heap memory addresses and causing a memory leak! */
 	float* temp; // Declare a temporary pointer to `float` to hold addresses whilst swapping the input and output pointers
-	temp = nbody_in->x; // Keep track of the old input pointer for later use so we don't lose any allocated memory
-	nbody_in->x = out_x; // Update the `nbody_in->x` pointer which is used for visualisation, and the next `step` iteration
+	temp = h_nbodies->x; // Keep track of the old input pointer for later use so we don't lose any allocated memory
+	h_nbodies->x = out_x; // Update the `h_nbodies->x` pointer which is used for visualisation, and the next `step` iteration
 	out_x = temp; // Reset `out_x` to a 'fresh', 'empty' piece of memory
-	temp = nbody_in->y; // Keep track of the old input pointer for later use so we don't lose any allocated memory
-	nbody_in->y = out_y; // Update the `nbody_in->y` pointer which is used for visualisation, and the next `step` iteration
+	temp = h_nbodies->y; // Keep track of the old input pointer for later use so we don't lose any allocated memory
+	h_nbodies->y = out_y; // Update the `h_nbodies->y` pointer which is used for visualisation, and the next `step` iteration
 	out_y = temp; // Reset `out_y` to a distinct piece of 'fresh' and 'empty' memory
 }
 
-void swap_float_pointers(float** p1, float** p2) {
-	// Function arguments are always passed by value, so to swap two pointers, we must pass references to those pointers
-	// The arguments `p1` and `p2` are actually addresses of pointers to `float` data (rather than the pointers themselves)
-	float* temp = *p1; // Set `temp` to be the pointer referenced by p1
-	*p1 = *p2; // Overwrite the pointer addressed by `p1` with the pointer addressed by `p2`
-	*p2 = temp; // Overwrite the pointer addressed by `p2` with the pointer addressed by `temp` (originally addressed by `p1`)
+// CUDA version (for parallel computation on GPU)
+void step_CUDA(void) {
+	/* This host function sets up kernel launch parameters and launches GPU kernel(s) to calculate one simulation step */
+	// First reset histogram values to zero with `cudaMemset`. 
+	// See https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__MEMORY.html for documentation
+	cudaMemset(activity_map, 0, sizeof(activity_map));
+
+	// Prepare kernel launch parameters
+	unsigned int blocks = N / THREADS_PER_BLOCK;
+	if ((N % THREADS_PER_BLOCK) != 0) { // Ensure we have the minimum number of blocks needed for total threads to exceed `N`
+		blocks++;
+	}
+	// Run the kernel
+	simulation_kernel << <blocks, 256 >> > (N, D);
+	//checkCUDAError("Error running simulation kernel\n");
+
+	/* New velocities and activity map data have been calculated in-place by the call to `simulation_kernel`, whilst new 
+	position data has been written to the buffers `out_x`, `out_y`. We must update the `d_nbodies` data pointers accordingly. */
+	swap_float_pointers(&d_nbodies->x, &out_x);
+	swap_float_pointers(&d_nbodies->y, &out_y);
 }
 
 /* Functions for parsing Command Line Arguments
@@ -633,7 +790,7 @@ void read_nbody_file(const char* filename, const int N) {
 			exit(EXIT_FAILURE);
 		}
 
-		/* Read the line of data into `nbody_in`, using comma character `,` as delimiter to separate data values 
+		/* Read the line of data into `h_nbodies`, using comma character `,` as delimiter to separate data values 
 		This could be considered as an unrolled while loop over commas counted using `strchr` calls with nontrivial control flow 
 		The use of `ptr_ch` as a separate variable from `line_buffer` could probably be removed. */
 		ptr_ch = line_buffer; // Place `ptr_ch` at the start of the line to be read
@@ -644,7 +801,7 @@ void read_nbody_file(const char* filename, const int N) {
 			fprintf(stderr, "Error reading line %u: No data delimiters (`,`) detected\n", line_number);
 			exit(EXIT_FAILURE);
 		}
-		else { // This appears to be a valid data line. Don't write past memory bounds for `nbody_in`!
+		else { // This appears to be a valid data line. Don't write past memory bounds for `h_nbodies`!
 			if (body_count > N-1) { // Throw an error if we have already read `N` or more data rows
 				fprintf(stderr, "Error reading line %u: Num bodies in file exceeds input N (%d)\n", line_number, N);
 				exit(EXIT_FAILURE);
@@ -657,7 +814,7 @@ void read_nbody_file(const char* filename, const int N) {
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
 			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `x` value, then update `ptr_ch` to point to end of number
-				nbody_in->x[body_count] = (float)strtod(ptr_ch, &ptr_ch);
+				h_nbodies->x[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				checkLastError("Error parsing `x` data to `float`");
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
@@ -666,7 +823,7 @@ void read_nbody_file(const char* filename, const int N) {
 				}
 			}
 			else { // Decide data missing or corrupted - means we ignore strings like ".5" and "-.2"
-				nbody_in->x[body_count] = (float)rand() / RAND_MAX; // Random position in [0,1]
+				h_nbodies->x[body_count] = (float)rand() / RAND_MAX; // Random position in [0,1]
 			}
 			ptr_ch = strchr(ptr_ch, ',') + 1; // Update `ptr_ch` to start after the 1st comma
 		}
@@ -682,7 +839,7 @@ void read_nbody_file(const char* filename, const int N) {
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
 			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `y` value, then update `ptr_ch` to point to end of number
-				nbody_in->y[body_count] = (float)strtod(ptr_ch, &ptr_ch);
+				h_nbodies->y[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				checkLastError("Error parsing `y` data to `float`");
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
@@ -691,7 +848,7 @@ void read_nbody_file(const char* filename, const int N) {
 				}
 			}
 			else { // Decide data missing or corrupted - means we ignore strings like ".5" and "-.2"
-				nbody_in->y[body_count] = (float)rand() / RAND_MAX; // Random position in [0,1]
+				h_nbodies->y[body_count] = (float)rand() / RAND_MAX; // Random position in [0,1]
 			}
 			ptr_ch = strchr(ptr_ch, ',') + 1; // Update `ptr_ch` to start after 2nd comma
 		}
@@ -707,7 +864,7 @@ void read_nbody_file(const char* filename, const int N) {
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
 			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `vx` value, then update `ptr_ch` to point to end of number
-				nbody_in->vx[body_count] = (float)strtod(ptr_ch, &ptr_ch);
+				h_nbodies->vx[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				checkLastError("Error parsing `vx` data to `float`");
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
@@ -730,7 +887,7 @@ void read_nbody_file(const char* filename, const int N) {
 			// If string matches `[+-]?[0-9]+.*` after preceding whitespace, parse with `strtod`
 			if (isdigit(ptr_ch[0]) || (((ptr_ch[0] == '+') || (ptr_ch[0] == '-')) && isdigit(ptr_ch[1]))) {
 				// Parse and store `vx` value, then update `ptr_ch` to point to end of number
-				nbody_in->vy[body_count] = (float)strtod(ptr_ch, &ptr_ch);
+				h_nbodies->vy[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				checkLastError("Error parsing `vy` data to `float`");
 				// Check there are no further digits before the comma at `strchr(ptr_ch, ',')`
 				if ((strpbrk(ptr_ch, "0123456789") < strchr(ptr_ch, ',')) && (strpbrk(ptr_ch, "0123456789") != NULL)) {
@@ -750,11 +907,11 @@ void read_nbody_file(const char* filename, const int N) {
 			if (strtod(ptr_ch, NULL) == 0) { // If zero returned, then input data was either missing, corrupted, or zero
 				fprintf(stderr, "Error reading line %u: Mass data missing, corrupted, or set to zero. Replacing with default value (1/N) to avoid massless bodies\n", line_number);
 				// Set mass to 1/N to avoid creating massless objects (and divide-by-zero problems later)
-				nbody_in->m[body_count] = (float)1 / N; // Mass distributed equally among N bodies
+				h_nbodies->m[body_count] = (float)1 / N; // Mass distributed equally among N bodies
 			}
 			else { // Otherwise non-zero `float` value for mass read successfully, so write to `m`
 				// Parse and store `m` value, then update `ptr_ch` to point to end of number
-				nbody_in->m[body_count] = (float)strtod(ptr_ch, &ptr_ch);
+				h_nbodies->m[body_count] = (float)strtod(ptr_ch, &ptr_ch);
 				checkLastError("Error parsing mass data to `float`");
 				if (strpbrk(ptr_ch, "0123456789") != NULL) { // Check there are no further digits before the end of the line
 					fprintf(stderr, "Error reading line %u: Unexpected format when parsing mass data\n", line_number);
@@ -776,6 +933,14 @@ void checkLastError(const char* msg) {
 	if (errno != 0) {
 		perror(msg);
 		print_help();
+		exit(EXIT_FAILURE);
+	}
+}
+
+void checkCUDAError(const char* msg) {
+	cudaError_t err = cudaGetLastError();
+	if (err != cudaSuccess) {
+		fprintf(stderr, "CUDA ERROR: %s: %s.\n", msg, cudaGetErrorString(err));
 		exit(EXIT_FAILURE);
 	}
 }

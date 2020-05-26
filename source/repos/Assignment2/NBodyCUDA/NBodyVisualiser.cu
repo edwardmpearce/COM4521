@@ -117,7 +117,7 @@ const char* nbody_vertexShaderSource =
 };
 
 ////////////////////////////////        CUDA Kernels       ////////////////////////////////
-__global__ void copyNBodyData2f(float* buffer, const float *x, const float *y, unsigned int N) {
+__global__ void copyNBodyData2f(float* buffer, const float *x, const float *y, const unsigned int N) {
 	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i < N) {
 		// Copy data to mapped `buffer`, which should have length at least `2N`
@@ -127,7 +127,7 @@ __global__ void copyNBodyData2f(float* buffer, const float *x, const float *y, u
 	}
 }
 
-__global__ void copyNBodyData(float* buffer, const nbody_soa* bodies, unsigned int N) {
+__global__ void copyNBodyData(float* buffer, const nbody_soa* bodies, const unsigned int N) {
 	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i < N) {
 		// Copy data to mapped `buffer`, which should have length at least `2N`
@@ -137,7 +137,7 @@ __global__ void copyNBodyData(float* buffer, const nbody_soa* bodies, unsigned i
 	}
 }
 
-__global__ void copyHistData(float* buffer, const float* densities, unsigned int D) {
+__global__ void copyHistData(float* buffer, const float* densities, const unsigned int D) {
 	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i < D*D) {
 		// Copy data to mapped `buffer`, which should have length at least `D^2`
@@ -172,37 +172,37 @@ void initViewer(unsigned int n, unsigned int d, MODE m, void(*simulate)(void)) {
 }
 
 void setNBodyPositions2f(const float *positions_x, const float *positions_y) {
-	if (M == CUDA){ // Check that the supplied pointers are device pointers when in `CUDA` mode
+	// Check that the supplied pointers are device pointers when in `CUDA` mode
+	if (M == CUDA) { 
 		cudaPointerAttributes attributes;
 
 		// Host allocated memory will cause an error - check for `positions_x`
-		if (cudaPointerGetAttributes(&attributes, positions_x) == cudaErrorInvalidValue){
+		if (cudaPointerGetAttributes(&attributes, positions_x) == cudaErrorInvalidValue) {
 			cudaGetLastError(); // Clear out the previous API error
 			printf("Error: Pointer (positions_x) passed to setNBodyPositions2f must be a device pointer in CUDA mode!\n");
 			return;
 		}
 
 		// If UVA was used, memory allocated by the device may still be `cudaMemoryTypeHost`, which can't be used by the device.
-		if (attributes.type != cudaMemoryTypeDevice){
+		if (attributes.type != cudaMemoryTypeDevice) {
 			printf("Error: Pointer (positions_x) passed to setNBodyPositions2f must be a device pointer in CUDA mode!\n");
 			return;
 		}
 
 		// Host allocated memory will cause an error - check for `positions_y`
-		if (cudaPointerGetAttributes(&attributes, positions_y) == cudaErrorInvalidValue){
+		if (cudaPointerGetAttributes(&attributes, positions_y) == cudaErrorInvalidValue) {
 			cudaGetLastError(); // Clear out the previous API error
 			printf("Error: Pointer (positions_y) passed to setNBodyPositions2f must be a device pointer in CUDA mode!\n");
 			return;
 		}
 
 		// If UVA was used, memory allocated by the device may still be `cudaMemoryTypeHost`, which can't be used by the device.
-		if (attributes.type != cudaMemoryTypeDevice){
+		if (attributes.type != cudaMemoryTypeDevice) {
 			printf("Error: Pointer (positions_y) passed to setNBodyPositions2f must be a device pointer in CUDA mode!\n");
 			return;
 		}
 	}
 
-	// Else we are in `CPU` or `OPENMP` mode and don't check whether host pointers were received
 	PositionsX = positions_x;
 	PositionsY = positions_y;
 	if (Bodies != 0){
@@ -211,26 +211,26 @@ void setNBodyPositions2f(const float *positions_x, const float *positions_y) {
 }
 
 void setNBodyPositions(const nbody_soa *bodies) {
-	if (M == CUDA){ // Check that the supplied pointer is a device pointer when in `CUDA` mode
+	// Check that the supplied pointer is a device pointer when in `CUDA` mode
+	if (M == CUDA) { 
 		cudaPointerAttributes attributes;
 
 		// Host allocated memory will cause an error - check for `bodies`
-		if (cudaPointerGetAttributes(&attributes, bodies) == cudaErrorInvalidValue){
+		if (cudaPointerGetAttributes(&attributes, bodies) == cudaErrorInvalidValue) {
 			cudaGetLastError(); // Clear out the previous API error
 			printf("Error: Pointer (bodies) passed to setNBodyPositions must be a device pointer in CUDA mode!\n");
 			return;
 		}
 
 		// If UVA was used, memory allocated by the device may still be `cudaMemoryTypeHost`, which can't be used by the device.
-		if (attributes.type != cudaMemoryTypeDevice){
+		if (attributes.type != cudaMemoryTypeDevice) {
 			printf("Error: Pointer (bodies) passed to setNBodyPositions must be a device pointer in CUDA mode!\n");
 			return;
 		}
 	}
 
-	// Else we are in `CPU` or `OPENMP` mode and don't check whether a host pointer was received
 	Bodies = bodies;
-	if ((PositionsX != 0) || (PositionsY != 0)){
+	if ((PositionsX != 0) || (PositionsY != 0)) {
 		printf("Warning: You should use either setNBodyPositions2f or setNBodyPositions\n");
 	}
 }
@@ -240,24 +240,24 @@ void setHistogramData(const float *densities) { // Alias function to avoid repet
 }
 
 void setActivityMapData(const float *activity) {
-	if (M == CUDA){ // Check that the supplied pointer is a device pointer when in `CUDA` mode
+	// Check that the supplied pointer is a device pointer when in `CUDA` mode
+	if (M == CUDA){ 
 		cudaPointerAttributes attributes;
 
 		// Host allocated memory will cause an error - check for `activity`
-		if (cudaPointerGetAttributes(&attributes, activity) == cudaErrorInvalidValue){
+		if (cudaPointerGetAttributes(&attributes, activity) == cudaErrorInvalidValue) {
 			cudaGetLastError(); // Clear out the previous API error
 			printf("Error: Pointer passed to setActivityMap (or setHistogramData) must be a device pointer in CUDA mode!\n");
 			return;
 		}
 
 		// If UVA was used, memory allocated by the device may still be `cudaMemoryTypeHost`, which can't be used by the device.
-		if (attributes.type != cudaMemoryTypeDevice){
+		if (attributes.type != cudaMemoryTypeDevice) {
 			printf("Error: Pointer passed to setActivityMap (or setHistogramData) must be a device pointer in CUDA mode!\n");
 			return;
 		}
 	}
 
-	// Else we are in `CPU` or `OPENMP` mode and don't check whether a host pointer was received
 	Densities = activity;
 }
 
@@ -338,7 +338,7 @@ void displayLoop(void) {
 		checkCUDAError("Error copying Activity Map data from supplied device pointer\n");
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, 0);
 	}
-	else{ // Map data from user supplied pointers into Texture Buffer Object using CPU for `CPU` or `OPENMP` mode
+	else { // Map data from user supplied pointers into Texture Buffer Object using CPU for `CPU` or `OPENMP` mode
 		// Map buffer to Texture Buffer Object for Nbody positions and copy data to it from user supplied pointer
 		glBindBuffer(GL_TEXTURE_BUFFER_EXT, tbo_nbody);
 		dptr = (float*)glMapBuffer(GL_TEXTURE_BUFFER_EXT, GL_WRITE_ONLY);	// `tbo_nbody` buffer
