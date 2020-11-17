@@ -81,35 +81,35 @@ __device__ void swap_float_pointers(float** p1, float** p2) {
 	*p2 = temp; // Overwrite the pointer addressed by `p2` with the pointer addressed by `temp` (originally addressed by `p1`)
 }
 
-__global__ void simulation_kernel(const unsigned int N, const unsigned int D) {
+__global__ void simulation_kernel(nbody_soa * nbody_in, float * new_x, float * new_y, float * activity, const unsigned int N, const unsigned int D) {
 	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; // Iterating over bodies in the Nbody system, one thread per body
 	if (i < N) { // One unique index for each body and any leftover threads stay idle
 		float ax = 0, ay = 0; // Initialise resultant acceleration to zero
 		// Read position data from global/constant/texture memory to thread-local stack variables
-		float local_xi = d_nbodies->x[i];
-		float local_yi = d_nbodies->y[i];
+		float local_xi = nbody_in->x[i];
+		float local_yi = nbody_in->y[i];
 		// Calculate the acceleration of body `i` due to gravitational force from the other bodies
 		for (unsigned int j = 0; j < N; j++) { 
 			if (j == i) { // Skip the calculation when i = j
 				continue;
 			}
 			// Calculate displacement from particle `i` to particle `j`, since common expression in force equation
-			float x_ji = d_nbodies->x[j] - local_xi;
-			float y_ji = d_nbodies->y[j] - local_yi;
+			float x_ji = nbody_in->x[j] - local_xi;
+			float y_ji = nbody_in->y[j] - local_yi;
 			// Calculate distance from `i` to `j` with softening factor since used in denominator of force expression
 			// Single precision square root: https://docs.nvidia.com/cuda/cuda-math-api/group__CUDA__MATH__SINGLE.html
 			float dist_ij = sqrtf(x_ji * x_ji + y_ji * y_ji + eps_sq);
 			/* Add unscaled contribution to acceleration due to gravitational force of `j` on `i`
 			Universal Gravitation: `F_ij = G * m_i * m_j * r_ji / |r_ji|^3` ; Newton's 2nd Law: F_i = m_i * a_i */
-			ax += d_nbodies->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
-			ay += d_nbodies->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			ax += nbody_in->m[j] * x_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
+			ay += nbody_in->m[j] * y_ji / (dist_ij * dist_ij * dist_ij); // Need to scale by `G` later
 			/* It would be possible to add force/acceleration contributions to `d_nbodies->v` directly within this inner loop.
 			However this would cause this function to be bound by memory access latency (repeated writes to `d_nbodies->v`).
 			Therefore we use the temporary/local variables `ax` and `ay` instead */
 		}
 		/* Use current velocity, acceleration to calculate position, velocity at next time step, respectively. */
-		float local_vxi = d_nbodies->vx[i];
-		float local_vyi = d_nbodies->vy[i];
+		float local_vxi = nbody_in->vx[i];
+		float local_vyi = nbody_in->vy[i];
 		// Care has to be taken about the order of execution to ensure the output positions are calculated correctly
 		// Use current velocity to calculate next position
 		local_xi += local_vxi * dt;
@@ -118,13 +118,13 @@ __global__ void simulation_kernel(const unsigned int N, const unsigned int D) {
 
 		// Use current acceleration (based on current positions) to calculate the new velocity
 		// Scale `ax`, `ay` by gravitational constant `G`. See `NBody.h` for definition and comment.
-		d_nbodies->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `d_nbodies->vx[i]`
-		d_nbodies->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `d_nbodies->vy[i]`
+		nbody_in->vx[i] = local_vxi + G * ax * dt; // Write the new velocity back to `d_nbodies->vx[i]`
+		nbody_in->vy[i] = local_vyi + G * ay * dt; // Write the new velocity back to `d_nbodies->vy[i]`
 		// We can update particle velocities in-place without adversely affecting subsequent iterations/other threads
 
 		// Write the new position of particle `i` to the output buffers to avoid interfering with other threads
-		out_x[i] = local_xi;
-		out_y[i] = local_yi;
+		new_x[i] = local_xi;
+		new_y[i] = local_yi;
 		// Pointer swapping of position data occurs outside of the kernel launch in the `step_CUDA` function
 
 		// Update the activity map - a flat array of D*D float values storing normalised particle density values in a 2D grid
@@ -136,7 +136,7 @@ __global__ void simulation_kernel(const unsigned int N, const unsigned int D) {
 
 			// Increase the associated histogram bin by the normalised quantity `D/N` (scaling by D to increase brightness)
 			// Can result in race condition as multiple threads could increment at once. Could solve with `atomicAdd`
-			activity_map[index] += (float) D / N; 
+			activity[index] += (float) D / N; 
 			// Unfortunately this is a random access (write) to global memory and cannot easily be coalesced
 			/* We choose not to reduce the number of multiplication/division operations by incrementing the histogram bin by one
 			at this step and then scaling the histogram counts in a separate loop (as in the other implementations) in order to
@@ -662,12 +662,10 @@ void step_CUDA(void) {
 	cudaMemset(activity_map, 0, sizeof(activity_map));
 
 	// Prepare kernel launch parameters
-	unsigned int blocks = N / THREADS_PER_BLOCK;
-	if ((N % THREADS_PER_BLOCK) != 0) { // Ensure we have the minimum number of blocks needed for total threads to exceed `N`
-		blocks++;
-	}
+	// Ensure we have the minimum number of blocks needed for total threads to exceed `N`
+	unsigned int blocks = (N + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 	// Run the kernel
-	simulation_kernel << <blocks, 256 >> > (N, D);
+	simulation_kernel << <blocks, THREADS_PER_BLOCK >> > (d_nbodies, out_x, out_y, activity_map, N, D);
 	//checkCUDAError("Error running simulation kernel\n");
 
 	/* New velocities and activity map data have been calculated in-place by the call to `simulation_kernel`, whilst new 

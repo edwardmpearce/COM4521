@@ -22,7 +22,7 @@ void checkCUDAError(const char*);
 void read_encrypted_file(int*);
 
 /* 1.1 Modify the `modulo` function so that it can be called on the device by the `affine_decrypt` kernel. */
-__device__ int modulo(int a, int m){
+__device__ int modulo(int a, int m) {
 	int r = a % m; // The remainder operator works differently for negative numbers (as we always want positive output)
 	r = (r < 0) ? r + m : r; // We add `m` to the remainder `r` when `r` is negative, else do nothing
 	return r;
@@ -31,22 +31,19 @@ __device__ int modulo(int a, int m){
 /* 1.2 Implement the decryption kernel for a single block of threads with an `x` dimension of `N` (1024). 
 The function should store the result in `d_output`. You can define the 
 inverse modulus `A`, `B` and `M` using pre-processor definitions. */
-__global__ void affine_decrypt(int *d_input, int *d_output)
-{
+__global__ void affine_decrypt(int *d_input, int *d_output) {
 	int i = threadIdx.x;
 	d_output[i] = modulo(A * (d_input[i] - B), M);
 }
 
 /* 1.8 Complete the `affine_decrypt_multiblock` kernel to work using multiple blocks of threads. 
 Change your grid and block dimensions so that you launch 8 blocks of 128 threads. Note: 8 * 128 = 1024. */
-__global__ void affine_decrypt_multiblock(int *d_input, int *d_output)
-{
+__global__ void affine_decrypt_multiblock(int *d_input, int *d_output) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	d_output[i] = modulo(A * (d_input[i] - B), M);
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
 	int *h_input, *h_output;
 	int *d_input, *d_output;
 	unsigned int size;
@@ -111,21 +108,18 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-void checkCUDAError(const char *msg)
-{
+void checkCUDAError(const char *msg) {
 	cudaError_t err = cudaGetLastError();
-	if (err != cudaSuccess)
-	{
+	if (err != cudaSuccess) {
 		fprintf(stderr, "CUDA ERROR: %s: %s.\n", msg, cudaGetErrorString(err));
 		exit(EXIT_FAILURE);
 	}
 }
 
-void read_encrypted_file(int* input)
-{
+void read_encrypted_file(int* input) {
 	FILE *f = NULL;
 	f = fopen("encrypted1.bin", "rb"); // Read-only and binary flags
-	if (f == NULL){
+	if (f == NULL) {
 		fprintf(stderr, "Error: Could not find encrypted1.bin file \n");
 		exit(1);
 	}
