@@ -125,7 +125,7 @@ Run your parallelised code and compare the text file output to the original (ser
 using the file compare command `FC` in a Windows terminal.
 1.2  Set the OpenMP clause `default(none)`. This will give a compiler error for any variables 
 which you have not explicitly defined the scope. Now try defining the scope for all variables of the parallel block. 
-This should achieve both both a speedup and return the correct result
+This should achieve both a speedup and return the correct result
 The variable `i` is the parallel loop counter so is implicitly defined as `private`.
 The variables`a` and `b` are `const` so are implicitly `shared`. */
 void multiply(matrixNN r, const matrixNN a, const matrixNN b){

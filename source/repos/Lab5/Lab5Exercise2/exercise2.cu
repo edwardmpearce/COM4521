@@ -255,7 +255,7 @@ int main(void) {
 		cudaMemcpyToSymbol(d_sphere_count, &sphere_count, sizeof(unsigned int));
 		checkCUDAError("CUDA copy sphere count to device");
 
-		// Generate an image from the sphere data, and time the kernel execution (normal/gloabl memory version)
+		// Generate an image from the sphere data, and time the kernel execution (normal/global memory version)
 		cudaEventRecord(start, 0);
 		ray_trace << <blocksPerGrid, threadsPerBlock >> > (d_image, d_spheres);
 		cudaEventRecord(stop, 0);

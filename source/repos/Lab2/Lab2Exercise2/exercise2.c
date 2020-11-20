@@ -21,7 +21,7 @@ Note that as usual, the end of the character array/string (i.e. `char[n]`) is te
 /* 2. Modify the `struct` definition so that forename and surname are pointers to `char`. Now update
 the code to read the student data. You will need to use `fread` to read the length of the forename (i.e. `n`). 
 Hint: allocate memory for the forename (of length `n`) and then `fread` the forename, etc.
-Don’t forget to also update your code to ensure that you free any memory you have allocated. */
+Don't forget to also update your code to ensure that you free any memory you have allocated. */
 struct student{
 	char * forename;
 	char * surname;

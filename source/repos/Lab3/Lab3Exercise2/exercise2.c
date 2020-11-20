@@ -162,7 +162,7 @@ int main(int argc, char *argv[]) {
 				temp_re = z_re;
 				temp_im = z_im;
 
-				// Calculate the next value in the sequence according to the rule `z_i+1} = z_{i}^{2} + c`
+				// Calculate the next value in the sequence according to the rule `z_{i+1} = z_{i}^{2} + c`
 				z_re = temp_re * temp_re - temp_im * temp_im + c_re;
 				z_im = 2.0 * temp_re * temp_im + c_im;
 			}

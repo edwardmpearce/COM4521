@@ -32,7 +32,7 @@ To test if your stream is at the end of a file (i.e. it has read the last record
 the return value of `fread` (if less than the requested number of items are returned this indicates the end of the file). 
 You should use the `create_linked_list` and `add_to_linked_list` functions. 
 You can use the `free_linked_list` function to free your linked list but be careful 
-as this won’t free the records which the linked list points to. */
+as this won't free the records which the linked list points to. */
 void main() {
 	llitem* start = NULL;
 	llitem* end = NULL;
